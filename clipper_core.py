@@ -15,6 +15,7 @@ import time
 from pathlib import Path
 from datetime import datetime
 from openai import OpenAI
+import google.generativeai as genai
 
 # Hide console window on Windows
 SUBPROCESS_FLAGS = 0
@@ -52,29 +53,58 @@ class AutoClipperCore:
         if self.ai_providers:
             # Highlight Finder client
             hf_config = self.ai_providers.get("highlight_finder", {})
-            self.highlight_client = OpenAI(
-                api_key=hf_config.get("api_key", ""),
-                base_url=hf_config.get("base_url", "https://api.openai.com/v1")
-            )
-            self.model = hf_config.get("model", model)
+            self.hf_provider_type = hf_config.get("provider_type", "openai")
+            
+            if self.hf_provider_type == "gemini":
+                genai.configure(api_key=hf_config.get("api_key", ""))
+                self.highlight_client = genai.GenerativeModel(hf_config.get("model", "gemini-1.5-flash"))
+                self.model = hf_config.get("model", "gemini-1.5-flash")
+            else:
+                self.highlight_client = OpenAI(
+                    api_key=hf_config.get("api_key", ""),
+                    base_url=hf_config.get("base_url", "https://api.openai.com/v1")
+                )
+                self.model = hf_config.get("model", model)
             
             # Caption Maker client (Whisper)
             cm_config = self.ai_providers.get("caption_maker", {})
-            self.caption_client = OpenAI(
-                api_key=cm_config.get("api_key", ""),
-                base_url=cm_config.get("base_url", "https://api.openai.com/v1")
-            )
-            self.whisper_model = cm_config.get("model", "whisper-1")
+            self.cm_provider_type = cm_config.get("provider_type", "openai")
+            
+            if self.cm_provider_type == "gemini":
+                genai.configure(api_key=cm_config.get("api_key", ""))
+                # Gemini uses the same client for everything, but we store the model name
+                self.caption_client = genai.GenerativeModel(cm_config.get("model", "gemini-1.5-flash"))
+                self.whisper_model = cm_config.get("model", "gemini-1.5-flash")
+            else:
+                self.caption_client = OpenAI(
+                    api_key=cm_config.get("api_key", ""),
+                    base_url=cm_config.get("base_url", "https://api.openai.com/v1")
+                )
+                self.whisper_model = cm_config.get("model", "whisper-1")
             
             # Hook Maker client (TTS)
             hm_config = self.ai_providers.get("hook_maker", {})
-            self.tts_client = OpenAI(
-                api_key=hm_config.get("api_key", ""),
-                base_url=hm_config.get("base_url", "https://api.openai.com/v1")
-            )
-            self.tts_model = hm_config.get("model", tts_model)
+            self.hm_provider_type = hm_config.get("provider_type", "openai")
+            
+            if self.hm_provider_type == "gemini":
+                # Gemini doesn't have TTS, so we fallback to OpenAI if possible or warn
+                self.log("  ⚠ Warning: Gemini does not support TTS (Hook Maker). Falling back to OpenAI if configured.")
+                self.tts_client = OpenAI(
+                    api_key=hm_config.get("api_key", ""),
+                    base_url=hm_config.get("base_url", "https://api.openai.com/v1")
+                )
+                self.tts_model = hm_config.get("model", tts_model)
+            else:
+                self.tts_client = OpenAI(
+                    api_key=hm_config.get("api_key", ""),
+                    base_url=hm_config.get("base_url", "https://api.openai.com/v1")
+                )
+                self.tts_model = hm_config.get("model", tts_model)
         else:
             # Fallback to single client (backward compatibility)
+            self.hf_provider_type = "openai"
+            self.cm_provider_type = "openai"
+            self.hm_provider_type = "openai"
             self.highlight_client = client
             self.caption_client = client
             self.tts_client = client
@@ -478,17 +508,34 @@ Transcript:
         if "{num_clips}" in self.system_prompt and "{num_clips}" in prompt:
             self.log("  ⚠ Warning: {num_clips} placeholder not replaced - check your system prompt")
 
-        response = self.highlight_client.chat.completions.create(
-            model=self.model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=self.temperature,
-        )
-        
-        # Report token usage (input and output separately)
-        if response.usage:
-            self.report_tokens(response.usage.prompt_tokens, response.usage.completion_tokens, 0, 0)
-        
-        result = response.choices[0].message.content.strip()
+        if self.hf_provider_type == "gemini":
+            response = self.highlight_client.generate_content(
+                prompt,
+                generation_config=genai.types.GenerationConfig(
+                    temperature=self.temperature,
+                )
+            )
+            result = response.text.strip()
+            # Report tokens for Gemini
+            try:
+                # Gemini usage metadata might vary by version
+                prompt_tokens = response.usage_metadata.prompt_token_count
+                candidate_tokens = response.usage_metadata.candidates_token_count
+                self.report_tokens(prompt_tokens, candidate_tokens, 0, 0)
+            except:
+                pass
+        else:
+            response = self.highlight_client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=self.temperature,
+            )
+            
+            # Report token usage (input and output separately)
+            if response.usage:
+                self.report_tokens(response.usage.prompt_tokens, response.usage.completion_tokens, 0, 0)
+            
+            result = response.choices[0].message.content.strip()
         
         # Log raw response for debugging
         self.log(f"  Raw GPT response (first 500 chars):\n{result[:500]}")
@@ -1451,21 +1498,54 @@ Transcript:
             audio_duration = int(h) * 3600 + int(m) * 60 + float(s)
             self.report_tokens(0, 0, audio_duration, 0)
         
-        # Transcribe using OpenAI Whisper API with word-level timestamps
+        # Transcribe using either OpenAI Whisper or Gemini API
         try:
-            with open(audio_file, "rb") as f:
-                transcript = self.caption_client.audio.transcriptions.create(
-                    model=self.whisper_model,
-                    file=f,
-                    language="id",
-                    response_format="verbose_json",
-                    timestamp_granularities=["word"]
-                )
+            if self.cm_provider_type == "gemini":
+                self.log("  Transcribing with Gemini...")
+                # Upload audio to Gemini
+                audio_upload = genai.upload_file(path=audio_file, mime_type="audio/wav")
+                
+                prompt = "Transcribe this audio with word-level timestamps. Return ONLY JSON array of objects with keys: 'word', 'start', 'end'. 'start' and 'end' must be floats in seconds."
+                
+                response = self.caption_client.generate_content([prompt, audio_upload])
+                result_text = response.text.strip()
+                
+                # Cleanup uploaded file
+                audio_upload.delete()
+                
+                if result_text.startswith("```"):
+                    result_text = re.sub(r"```json?\n?", "", result_text)
+                    result_text = re.sub(r"```\n?", "", result_text)
+                
+                words_data = json.loads(result_text)
+                
+                # Convert to object format expected by create_ass_subtitle_capcut
+                class Word:
+                    def __init__(self, w, s, e):
+                        self.word = w
+                        self.start = s
+                        self.end = e
+                
+                class Transcript:
+                    def __init__(self, words):
+                        self.words = [Word(w['word'], w['start'], w['end']) for w in words]
+                
+                transcript = Transcript(words_data)
+            else:
+                with open(audio_file, "rb") as f:
+                    transcript = self.caption_client.audio.transcriptions.create(
+                        model=self.whisper_model,
+                        file=f,
+                        language="id",
+                        response_format="verbose_json",
+                        timestamp_granularities=["word"]
+                    )
         except Exception as e:
-            self.log(f"  Warning: Whisper API error: {e}")
+            self.log(f"  Warning: Transcription API error: {e}")
             import shutil
             shutil.copy(input_path, output_path)
-            os.unlink(audio_file)
+            if os.path.exists(audio_file):
+                os.unlink(audio_file)
             return
         
         os.unlink(audio_file)

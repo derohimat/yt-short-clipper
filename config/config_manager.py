@@ -123,21 +123,25 @@ class ConfigManager:
         """Get default AI provider configuration"""
         return {
             "highlight_finder": {
+                "provider_type": "openai",
                 "base_url": "https://api.openai.com/v1",
                 "api_key": "",
                 "model": "gpt-4.1"
             },
             "caption_maker": {
+                "provider_type": "openai",
                 "base_url": "https://api.openai.com/v1",
                 "api_key": "",
                 "model": "whisper-1"
             },
             "hook_maker": {
+                "provider_type": "openai",
                 "base_url": "https://api.openai.com/v1",
                 "api_key": "",
                 "model": "tts-1"
             },
             "youtube_title_maker": {
+                "provider_type": "openai",
                 "base_url": "https://api.openai.com/v1",
                 "api_key": "",
                 "model": "gpt-4.1"
@@ -153,21 +157,25 @@ class ConfigManager:
         
         old_config["ai_providers"] = {
             "highlight_finder": {
+                "provider_type": "openai",
                 "base_url": base_url,
                 "api_key": api_key,
                 "model": model
             },
             "caption_maker": {
+                "provider_type": "openai",
                 "base_url": base_url,
                 "api_key": api_key,
                 "model": "whisper-1"
             },
             "hook_maker": {
+                "provider_type": "openai",
                 "base_url": base_url,
                 "api_key": api_key,
                 "model": tts_model
             },
             "youtube_title_maker": {
+                "provider_type": "openai",
                 "base_url": base_url,
                 "api_key": api_key,
                 "model": model

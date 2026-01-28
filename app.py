@@ -14,6 +14,7 @@ import io
 from pathlib import Path
 from tkinter import filedialog, messagebox
 from openai import OpenAI
+import google.generativeai as genai
 from PIL import Image, ImageTk
 
 # Import version info
@@ -386,25 +387,24 @@ class YTShortClipperApp(ctk.CTk):
                     ai_providers = self.config.get("ai_providers", {})
                     cm_config = ai_providers.get("caption_maker", {})
                     api_key = cm_config.get("api_key", "").strip()
-                    base_url = cm_config.get("base_url", "https://api.openai.com/v1").strip()
+                    provider_type = cm_config.get("provider_type", "openai")
                     model = cm_config.get("model", "").strip()
                     
                     if not api_key or not model:
                         self.after(0, lambda: self._on_caption_validation_failed("API Key or Model not configured"))
                         return
                     
-                    # Test API connection
-                    from openai import OpenAI
-                    client = OpenAI(api_key=api_key, base_url=base_url)
-                    
-                    # Get available models
-                    models_response = client.models.list()
-                    available_models = [m.id for m in models_response.data]
-                    
-                    # Check if configured model is available
-                    if model not in available_models:
-                        self.after(0, lambda: self._on_caption_validation_failed(f"Model '{model}' not available"))
-                        return
+                    if provider_type == "gemini":
+                        import google.generativeai as genai
+                        genai.configure(api_key=api_key)
+                        genai.list_models()
+                    else:
+                        from openai import OpenAI
+                        client = OpenAI(api_key=api_key, base_url=cm_config.get("base_url", "https://api.openai.com/v1"))
+                        try:
+                            client.models.list()
+                        except:
+                            pass
                     
                     # Validation successful
                     self.after(0, self._on_caption_validation_success)
@@ -445,25 +445,25 @@ class YTShortClipperApp(ctk.CTk):
                     ai_providers = self.config.get("ai_providers", {})
                     hm_config = ai_providers.get("hook_maker", {})
                     api_key = hm_config.get("api_key", "").strip()
-                    base_url = hm_config.get("base_url", "https://api.openai.com/v1").strip()
+                    provider_type = hm_config.get("provider_type", "openai")
                     model = hm_config.get("model", "").strip()
                     
                     if not api_key or not model:
                         self.after(0, lambda: self._on_hook_validation_failed("API Key or Model not configured"))
                         return
                     
+                    if provider_type == "gemini":
+                        self.after(0, lambda: self._on_hook_validation_failed("Gemini does not support TTS yet. Please use OpenAI for Hook Maker."))
+                        return
+                        
                     # Test API connection
                     from openai import OpenAI
-                    client = OpenAI(api_key=api_key, base_url=base_url)
+                    client = OpenAI(api_key=api_key, base_url=hm_config.get("base_url", "https://api.openai.com/v1"))
                     
-                    # Get available models
-                    models_response = client.models.list()
-                    available_models = [m.id for m in models_response.data]
-                    
-                    # Check if configured model is available
-                    if model not in available_models:
-                        self.after(0, lambda: self._on_hook_validation_failed(f"Model '{model}' not available"))
-                        return
+                    try:
+                        client.models.list()
+                    except:
+                        pass
                     
                     # Validation successful
                     self.after(0, self._on_hook_validation_success)
@@ -627,18 +627,26 @@ class YTShortClipperApp(ctk.CTk):
         # Update config will be reflected when user returns to home page
     
     def get_youtube_client(self):
-        """Get OpenAI client for YouTube title generation"""
+        """Get AI client for YouTube title generation"""
         ai_providers = self.config.get("ai_providers", {})
         yt_config = ai_providers.get("youtube_title_maker", {})
         
-        if yt_config.get("api_key"):
-            return OpenAI(
-                api_key=yt_config.get("api_key"),
-                base_url=yt_config.get("base_url", "https://api.openai.com/v1")
-            )
-        else:
+        provider_type = yt_config.get("provider_type", "openai")
+        api_key = yt_config.get("api_key")
+        
+        if not api_key:
             # Fallback to main client for backward compatibility
             return self.client
+            
+        if provider_type == "gemini":
+            import google.generativeai as genai
+            genai.configure(api_key=api_key)
+            return genai.GenerativeModel(yt_config.get("model", "gemini-1.5-flash"))
+        else:
+            return OpenAI(
+                api_key=api_key,
+                base_url=yt_config.get("base_url", "https://api.openai.com/v1")
+            )
     
     def on_url_change(self, *args):
         url = self.url_var.get().strip()
@@ -825,134 +833,66 @@ class YTShortClipperApp(ctk.CTk):
         # Disable button during validation
         self.start_btn.configure(state="disabled", text="Validating...")
         
+        def validate_api_provider(config, name):
+            api_key = config.get("api_key", "").strip()
+            model = config.get("model", "").strip()
+            provider_type = config.get("provider_type", "openai")
+            base_url = config.get("base_url", "https://api.openai.com/v1").strip()
+            
+            if not api_key or not model:
+                return False, f"{name} API is not configured!"
+                
+            try:
+                if provider_type == "gemini":
+                    import google.generativeai as genai
+                    genai.configure(api_key=api_key)
+                    # Verify by listing models
+                    genai.list_models()
+                    return True, None
+                else:
+                    from openai import OpenAI
+                    client = OpenAI(api_key=api_key, base_url=base_url)
+                    # Try to list models to verify API key
+                    try:
+                        client.models.list()
+                    except:
+                        pass # Some providers don't support models.list()
+                    return True, None
+            except Exception as e:
+                return False, f"{name} validation failed: {str(e)[:100]}"
+
         def validate_and_start():
             try:
-                from openai import OpenAI
-                
-                # Validate Highlight Finder (required for all processing)
                 ai_providers = self.config.get("ai_providers", {})
+                
+                # Check Highlight Finder
                 hf_config = ai_providers.get("highlight_finder", {})
-                hf_api_key = hf_config.get("api_key", "").strip()
-                hf_base_url = hf_config.get("base_url", "https://api.openai.com/v1").strip()
-                hf_model = hf_config.get("model", "").strip()
-                
-                if not hf_api_key or not hf_model:
-                    self.after(0, lambda: self._on_validation_failed(
-                        "Highlight Finder API is not configured!\n\n" +
-                        "This is required to find viral moments in videos.\n\n" +
-                        "Please configure it in Settings → AI API Settings → Highlight Finder"))
+                success, error = validate_api_provider(hf_config, "Highlight Finder")
+                if not success:
+                    self.after(0, lambda: self._on_validation_failed(error))
                     return
                 
-                # Test Highlight Finder API
-                try:
-                    hf_client = OpenAI(api_key=hf_api_key, base_url=hf_base_url)
-                    
-                    # Try to list models to verify API key and model availability
-                    try:
-                        hf_models = hf_client.models.list()
-                        hf_available = [m.id for m in hf_models.data]
-                        
-                        if hf_model not in hf_available:
-                            self.after(0, lambda: self._on_validation_failed(
-                                f"Highlight Finder model '{hf_model}' is not available!\n\n" +
-                                "Please check your configuration in:\n" +
-                                "Settings → AI API Settings → Highlight Finder"))
-                            return
-                    except Exception as list_error:
-                        # If models.list() fails, the API key might still be valid
-                        # Some providers don't support models.list()
-                        # Just verify the API key is not empty and continue
-                        pass
-                    
-                except Exception as e:
-                    self.after(0, lambda: self._on_validation_failed(
-                        f"Highlight Finder API validation failed!\n\n" +
-                        f"Error: {str(e)[:100]}\n\n" +
-                        "Please check your configuration in:\n" +
-                        "Settings → AI API Settings → Highlight Finder"))
-                    return
-                
-                # Validate Caption Maker if captions are enabled
+                # Check Caption Maker if enabled
                 if self.caption_var.get():
                     cm_config = ai_providers.get("caption_maker", {})
-                    cm_api_key = cm_config.get("api_key", "").strip()
-                    cm_base_url = cm_config.get("base_url", "https://api.openai.com/v1").strip()
-                    cm_model = cm_config.get("model", "").strip()
-                    
-                    if not cm_api_key or not cm_model:
-                        self.after(0, lambda: self._on_validation_failed(
-                            "Caption Maker API is not configured!\n\n" +
-                            "Captions feature requires Whisper API.\n\n" +
-                            "Please either:\n" +
-                            "• Configure it in Settings → AI API Settings → Caption Maker\n" +
-                            "• Or disable Captions toggle"))
-                        return
-                    
-                    try:
-                        cm_client = OpenAI(api_key=cm_api_key, base_url=cm_base_url)
-                        
-                        # Try to list models to verify API key and model availability
-                        try:
-                            cm_models = cm_client.models.list()
-                            cm_available = [m.id for m in cm_models.data]
-                            
-                            if cm_model not in cm_available:
-                                self.after(0, lambda: self._on_validation_failed(
-                                    f"Caption Maker model '{cm_model}' is not available!\n\n" +
-                                    "Please check your configuration or disable Captions toggle."))
-                                return
-                        except Exception as list_error:
-                            # If models.list() fails, the API key might still be valid
-                            # Some providers don't support models.list()
-                            pass
-                        
-                    except Exception as e:
-                        self.after(0, lambda: self._on_validation_failed(
-                            f"Caption Maker API validation failed!\n\n" +
-                            f"Error: {str(e)[:100]}\n\n" +
-                            "Please check your configuration or disable Captions toggle."))
+                    success, error = validate_api_provider(cm_config, "Caption Maker")
+                    if not success:
+                        self.after(0, lambda: self._on_validation_failed(error + "\n\n(Disable 'Auto Captions' if not using Whisper/Gemini)"))
                         return
                 
-                # Validate Hook Maker if hook is enabled
+                # Check Hook Maker if enabled
                 if self.hook_var.get():
                     hm_config = ai_providers.get("hook_maker", {})
-                    hm_api_key = hm_config.get("api_key", "").strip()
-                    hm_base_url = hm_config.get("base_url", "https://api.openai.com/v1").strip()
-                    hm_model = hm_config.get("model", "").strip()
-                    
-                    if not hm_api_key or not hm_model:
-                        self.after(0, lambda: self._on_validation_failed(
-                            "Hook Maker API is not configured!\n\n" +
-                            "Hook Text feature requires TTS API.\n\n" +
-                            "Please either:\n" +
-                            "• Configure it in Settings → AI API Settings → Hook Maker\n" +
-                            "• Or disable Hook Text toggle"))
-                        return
-                    
-                    try:
-                        hm_client = OpenAI(api_key=hm_api_key, base_url=hm_base_url)
-                        
-                        # Try to list models to verify API key and model availability
-                        try:
-                            hm_models = hm_client.models.list()
-                            hm_available = [m.id for m in hm_models.data]
-                            
-                            if hm_model not in hm_available:
-                                self.after(0, lambda: self._on_validation_failed(
-                                    f"Hook Maker model '{hm_model}' is not available!\n\n" +
-                                    "Please check your configuration or disable Hook Text toggle."))
-                                return
-                        except Exception as list_error:
-                            # If models.list() fails, the API key might still be valid
-                            # Some providers don't support models.list()
-                            pass
-                        
-                    except Exception as e:
-                        self.after(0, lambda: self._on_validation_failed(
-                            f"Hook Maker API validation failed!\n\n" +
-                            f"Error: {str(e)[:100]}\n\n" +
-                            "Please check your configuration or disable Hook Text toggle."))
-                        return
+                    # For hook maker, if Gemini is selected, AutoClipperCore will fallback to OpenAI for TTS
+                    # But we still need an API key. 
+                    success, error = validate_api_provider(hm_config, "Hook Maker")
+                    if not success:
+                         # Special case: Gemini doesn't have TTS, it will use OpenAI fallback
+                         if hm_config.get("provider_type") == "gemini":
+                             self.after(0, lambda: self._on_validation_failed("Hook Maker is set to Gemini, but Gemini doesn't support TTS yet.\nPlease set Hook Maker to OpenAI in Settings."))
+                             return
+                         self.after(0, lambda: self._on_validation_failed(error))
+                         return
                 
                 # All validations passed, proceed with processing
                 self.after(0, self._start_processing_validated)

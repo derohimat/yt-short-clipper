@@ -330,13 +330,18 @@ PENTING:
 Return HANYA JSON, tanpa text lain."""
 
     try:
-        response = client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=temperature
-        )
-        
-        result = response.choices[0].message.content.strip()
+        # Check if client is Gemini (has generate_content method)
+        if hasattr(client, 'generate_content'):
+            response = client.generate_content(prompt)
+            result = response.text.strip()
+        else:
+            # Assume OpenAI client
+            response = client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=temperature
+            )
+            result = response.choices[0].message.content.strip()
         
         # Parse JSON
         if result.startswith("```"):

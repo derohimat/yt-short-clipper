@@ -220,28 +220,42 @@ class SettingsPage(ctk.CTkFrame):
         
         def do_validate():
             try:
-                from openai import OpenAI
-                client = OpenAI(api_key=api_key, base_url=url)
-                
-                # Try to list models to verify API key and model availability
-                try:
-                    models_response = client.models.list()
-                    available_models = [m.id for m in models_response.data]
+                provider_type = self.yt_provider_var.get()
+                if provider_type == "gemini":
+                    import google.generativeai as genai
+                    genai.configure(api_key=api_key)
+                    # Try to list models to verify API key
+                    models = genai.list_models()
+                    model_names = [m.name for m in models]
+                    short_names = [name.split('/')[-1] for name in model_names]
                     
-                    # Check if model is available
-                    if model not in available_models:
+                    if model in short_names or any(name.endswith(model) for name in model_names):
+                        self.after(0, lambda: self._on_yt_validate_success(model, "Gemini AI", validate_btn))
+                    else:
                         self.after(0, lambda: self._on_yt_validate_error(
-                            f"Model '{model}' not found in available models.\n\n" +
-                            f"Available models: {', '.join(available_models[:5])}...", 
+                            f"Model '{model}' not found in Gemini models.\n\n" +
+                            f"Available models: {', '.join(short_names[:5])}...", 
                             validate_btn))
-                        return
-                except Exception as list_error:
-                    # If listing models fails, the API key might still be valid
-                    # Some providers don't support models.list()
-                    # Just verify the API key is not empty and continue
-                    pass
-                
-                self.after(0, lambda: self._on_yt_validate_success(model, url, validate_btn))
+                else:
+                    from openai import OpenAI
+                    client = OpenAI(api_key=api_key, base_url=url)
+                    
+                    # Try to list models to verify API key and model availability
+                    try:
+                        models_response = client.models.list()
+                        available_models = [m.id for m in models_response.data]
+                        
+                        # Check if model is available
+                        if model not in available_models:
+                            self.after(0, lambda: self._on_yt_validate_error(
+                                f"Model '{model}' not found in available models.\n\n" +
+                                f"Available models: {', '.join(available_models[:5])}...", 
+                                validate_btn))
+                            return
+                    except:
+                        pass
+                    
+                    self.after(0, lambda: self._on_yt_validate_success(model, url, validate_btn))
             except Exception as e:
                 error_msg = str(e)
                 self.after(0, lambda: self._on_yt_validate_error(error_msg, validate_btn))
@@ -364,21 +378,43 @@ class SettingsPage(ctk.CTkFrame):
         
         def do_validate():
             try:
-                from openai import OpenAI
-                client = OpenAI(api_key=api_key, base_url=url)
-                
-                # Try to list models to verify API key and model availability
-                try:
-                    models_response = client.models.list()
-                    available_models = [m.id for m in models_response.data]
+                provider_type = self.hf_provider_var.get()
+                if provider_type == "gemini":
+                    import google.generativeai as genai
+                    genai.configure(api_key=api_key)
+                    # Try to list models to verify API key
+                    models = genai.list_models()
+                    model_names = [m.name for m in models]
+                    # Note: Gemini model names usually start with 'models/'
+                    short_names = [name.split('/')[-1] for name in model_names]
                     
-                    # Check if model is available
-                    if model not in available_models:
+                    if model in short_names or any(name.endswith(model) for name in model_names):
+                        self.after(0, lambda: self._on_hf_validate_success(model, "Gemini AI", validate_btn))
+                    else:
                         self.after(0, lambda: self._on_hf_validate_error(
-                            f"Model '{model}' not found in available models.\n\n" +
-                            f"Available models: {', '.join(available_models[:5])}...", 
+                            f"Model '{model}' not found in Gemini models.\n\n" +
+                            f"Available models: {', '.join(short_names[:5])}...", 
                             validate_btn))
-                        return
+                else:
+                    from openai import OpenAI
+                    client = OpenAI(api_key=api_key, base_url=url)
+                    
+                    # Try to list models to verify API key and model availability
+                    try:
+                        models_response = client.models.list()
+                        available_models = [m.id for m in models_response.data]
+                        
+                        # Check if model is available
+                        if model not in available_models:
+                            self.after(0, lambda: self._on_hf_validate_error(
+                                f"Model '{model}' not found in available models.\n\n" +
+                                f"Available models: {', '.join(available_models[:5])}...", 
+                                validate_btn))
+                            return
+                    except:
+                        pass
+                    
+                    self.after(0, lambda: self._on_hf_validate_success(model, url, validate_btn))
                 except Exception as list_error:
                     # If listing models fails, the API key might still be valid
                     # Some providers don't support models.list()
@@ -420,12 +456,21 @@ class SettingsPage(ctk.CTkFrame):
             messagebox.showerror("Error", "Model is required")
             return
         
+        provider_type = "openai"
+        if provider_key == "caption_maker": provider_type = self.cm_provider_var.get()
+        elif provider_key == "hook_maker": provider_type = self.hm_provider_var.get()
+        
         try:
-            from openai import OpenAI
-            client = OpenAI(api_key=api_key, base_url=url)
-            
-            # All providers: Try to list models to verify API connection
-            try:
+            if provider_type == "gemini":
+                import google.generativeai as genai
+                genai.configure(api_key=api_key)
+                # Try to list models
+                models_response = genai.list_models()
+                available_models = [m.name.split('/')[-1] for m in models_response]
+            else:
+                from openai import OpenAI
+                client = OpenAI(api_key=api_key, base_url=url)
+                # All providers: Try to list models to verify API connection
                 models_response = client.models.list()
                 available_models = [m.id for m in models_response.data]
                 
@@ -467,39 +512,67 @@ class SettingsPage(ctk.CTkFrame):
             messagebox.showerror("Validation Failed", 
                 f"Failed to validate configuration:\n\n{str(e)}")
     
-    def apply_url_key_to_all_simple(self, url, api_key):
-        """Apply URL and API Key to all providers"""
-        if not url and not api_key:
-            messagebox.showwarning("Warning", "Please enter URL and API Key first")
+    def apply_url_key_to_all_simple(self, url, api_key, provider_type="openai"):
+        """Apply URL, API Key and Provider Type to all providers"""
+        if not api_key:
+            messagebox.showwarning("Warning", "Please enter API Key first")
             return
         
         if messagebox.askyesno("Apply to All", 
-            "Apply this URL and API Key to all AI providers?\n\n(Models will remain separate)"):
+            "Apply this Configuration to all AI providers?\n\n(Models will remain separate)"):
             
             url = url or "https://api.openai.com/v1"
             
             # Apply to all entry fields
+            self.hf_provider_var.set(provider_type)
             self.hf_url_entry.delete(0, "end")
             self.hf_url_entry.insert(0, url)
-            self.hf_key_entry.delete(0, "end")
             self.hf_key_entry.insert(0, api_key)
+            self.on_hf_provider_change(provider_type)
             
+            self.cm_provider_var.set(provider_type)
             self.cm_url_entry.delete(0, "end")
             self.cm_url_entry.insert(0, url)
-            self.cm_key_entry.delete(0, "end")
             self.cm_key_entry.insert(0, api_key)
+            self.on_cm_provider_change(provider_type)
             
+            self.hm_provider_var.set(provider_type)
             self.hm_url_entry.delete(0, "end")
             self.hm_url_entry.insert(0, url)
-            self.hm_key_entry.delete(0, "end")
             self.hm_key_entry.insert(0, api_key)
+            self.on_hm_provider_change(provider_type)
             
+            self.yt_provider_var.set(provider_type)
             self.yt_url_entry.delete(0, "end")
             self.yt_url_entry.insert(0, url)
-            self.yt_key_entry.delete(0, "end")
             self.yt_key_entry.insert(0, api_key)
+            self.on_yt_provider_change(provider_type)
             
-            messagebox.showinfo("Success", "✓ URL and API Key applied to all providers!")
+            messagebox.showinfo("Success", "✓ Configuration applied to all providers!")
+            
+    def on_hf_provider_change(self, provider_type):
+        if provider_type.lower() == "gemini":
+            self.hf_url_entry.configure(state="disabled", fg_color="gray30")
+        else:
+            self.hf_url_entry.configure(state="normal", fg_color=("white", "gray20"))
+            
+    def on_cm_provider_change(self, provider_type):
+        if provider_type.lower() == "gemini":
+            self.cm_url_entry.configure(state="disabled", fg_color="gray30")
+        else:
+            self.cm_url_entry.configure(state="normal", fg_color=("white", "gray20"))
+            
+    def on_hm_provider_change(self, provider_type):
+        if provider_type.lower() == "gemini":
+            self.hm_url_entry.configure(state="disabled", fg_color="gray30")
+        else:
+            self.hm_url_entry.configure(state="normal", fg_color=("white", "gray20"))
+            
+    def on_yt_provider_change(self, provider_type):
+        if provider_type.lower() == "gemini":
+            self.yt_url_entry.configure(state="disabled", fg_color="gray30")
+        else:
+            self.yt_url_entry.configure(state="normal", fg_color=("white", "gray20"))
     
     def create_highlight_finder_tab(self):
         """Create Highlight Finder configuration tab"""
@@ -517,13 +590,27 @@ class SettingsPage(ctk.CTkFrame):
             text="AI model for analyzing video transcripts and finding viral moments. Recommended: GPT-4, GPT-4o, or compatible models.",
             font=ctk.CTkFont(size=11), text_color="gray", anchor="w", wraplength=450).pack(fill="x", padx=15, pady=(0, 12))
         
-        # API Base URL
-        url_frame = ctk.CTkFrame(scroll, fg_color="transparent")
-        url_frame.pack(fill="x", padx=10, pady=(0, 15))
+        # AI Provider
+        provider_frame = ctk.CTkFrame(scroll, fg_color="transparent")
+        provider_frame.pack(fill="x", padx=10, pady=(0, 15))
         
-        ctk.CTkLabel(url_frame, text="API Base URL", 
+        ctk.CTkLabel(provider_frame, text="AI Provider", 
             font=ctk.CTkFont(size=12, weight="bold"), anchor="w").pack(fill="x")
-        self.hf_url_entry = ctk.CTkEntry(url_frame, height=38, 
+        
+        self.hf_provider_var = ctk.StringVar(value="openai")
+        self.hf_provider_menu = ctk.CTkOptionMenu(provider_frame, height=38,
+            values=["openai", "gemini"], 
+            variable=self.hf_provider_var,
+            command=self.on_hf_provider_change)
+        self.hf_provider_menu.pack(fill="x", pady=(5, 0))
+        
+        # API Base URL
+        self.hf_url_frame = ctk.CTkFrame(scroll, fg_color="transparent")
+        self.hf_url_frame.pack(fill="x", padx=10, pady=(0, 15))
+        
+        ctk.CTkLabel(self.hf_url_frame, text="API Base URL", 
+            font=ctk.CTkFont(size=12, weight="bold"), anchor="w").pack(fill="x")
+        self.hf_url_entry = ctk.CTkEntry(self.hf_url_frame, height=38, 
             placeholder_text="https://api.openai.com/v1")
         self.hf_url_entry.pack(fill="x", pady=(5, 0))
         
@@ -625,7 +712,7 @@ class SettingsPage(ctk.CTkFrame):
         
         ctk.CTkButton(btn_frame, text="📋 Apply URL & Key to All", height=38,
             fg_color="gray",
-            command=lambda: self.apply_url_key_to_all_simple(self.hf_url_entry.get(), self.hf_key_entry.get())).pack(side="left", fill="x", expand=True, padx=(5, 0))
+            command=lambda: self.apply_url_key_to_all_simple(self.hf_url_entry.get(), self.hf_key_entry.get(), self.hf_provider_var.get())).pack(side="left", fill="x", expand=True, padx=(5, 0))
     
     def create_caption_maker_tab(self):
         """Create Caption Maker configuration tab"""
@@ -642,6 +729,20 @@ class SettingsPage(ctk.CTkFrame):
         ctk.CTkLabel(desc_frame, 
             text="Whisper model for generating word-level captions with precise timestamps. Recommended: whisper-1 or compatible models.",
             font=ctk.CTkFont(size=11), text_color="gray", anchor="w", wraplength=450).pack(fill="x", padx=15, pady=(0, 12))
+        
+        # AI Provider
+        provider_frame = ctk.CTkFrame(scroll, fg_color="transparent")
+        provider_frame.pack(fill="x", padx=10, pady=(0, 15))
+        
+        ctk.CTkLabel(provider_frame, text="AI Provider", 
+            font=ctk.CTkFont(size=12, weight="bold"), anchor="w").pack(fill="x")
+        
+        self.cm_provider_var = ctk.StringVar(value="openai")
+        self.cm_provider_menu = ctk.CTkOptionMenu(provider_frame, height=38,
+            values=["openai", "gemini"], 
+            variable=self.cm_provider_var,
+            command=self.on_cm_provider_change)
+        self.cm_provider_menu.pack(fill="x", pady=(5, 0))
         
         # API Base URL
         url_frame = ctk.CTkFrame(scroll, fg_color="transparent")
@@ -683,7 +784,7 @@ class SettingsPage(ctk.CTkFrame):
         
         ctk.CTkButton(btn_frame, text="📋 Apply URL & Key to All", height=38,
             fg_color="gray",
-            command=lambda: self.apply_url_key_to_all_simple(self.cm_url_entry.get(), self.cm_key_entry.get())).pack(side="left", fill="x", expand=True, padx=(5, 0))
+            command=lambda: self.apply_url_key_to_all_simple(self.cm_url_entry.get(), self.cm_key_entry.get(), self.cm_provider_var.get())).pack(side="left", fill="x", expand=True, padx=(5, 0))
     
     def create_hook_maker_tab(self):
         """Create Hook Maker configuration tab"""
@@ -700,6 +801,20 @@ class SettingsPage(ctk.CTkFrame):
         ctk.CTkLabel(desc_frame, 
             text="TTS model for generating audio hooks with natural voice. Recommended: tts-1, tts-1-hd, or compatible models.",
             font=ctk.CTkFont(size=11), text_color="gray", anchor="w", wraplength=450).pack(fill="x", padx=15, pady=(0, 12))
+        
+        # AI Provider
+        provider_frame = ctk.CTkFrame(scroll, fg_color="transparent")
+        provider_frame.pack(fill="x", padx=10, pady=(0, 15))
+        
+        ctk.CTkLabel(provider_frame, text="AI Provider", 
+            font=ctk.CTkFont(size=12, weight="bold"), anchor="w").pack(fill="x")
+        
+        self.hm_provider_var = ctk.StringVar(value="openai")
+        self.hm_provider_menu = ctk.CTkOptionMenu(provider_frame, height=38,
+            values=["openai", "gemini"], 
+            variable=self.hm_provider_var,
+            command=self.on_hm_provider_change)
+        self.hm_provider_menu.pack(fill="x", pady=(5, 0))
         
         # API Base URL
         url_frame = ctk.CTkFrame(scroll, fg_color="transparent")
@@ -741,7 +856,7 @@ class SettingsPage(ctk.CTkFrame):
         
         ctk.CTkButton(btn_frame, text="📋 Apply URL & Key to All", height=38,
             fg_color="gray",
-            command=lambda: self.apply_url_key_to_all_simple(self.hm_url_entry.get(), self.hm_key_entry.get())).pack(side="left", fill="x", expand=True, padx=(5, 0))
+            command=lambda: self.apply_url_key_to_all_simple(self.hm_url_entry.get(), self.hm_key_entry.get(), self.hm_provider_var.get())).pack(side="left", fill="x", expand=True, padx=(5, 0))
     
     def create_youtube_title_tab(self):
         """Create YouTube Title Maker configuration tab"""
@@ -758,6 +873,20 @@ class SettingsPage(ctk.CTkFrame):
         ctk.CTkLabel(desc_frame, 
             text="AI model for generating SEO-optimized titles, descriptions, and tags. Recommended: GPT-4, GPT-4o, or compatible models.",
             font=ctk.CTkFont(size=11), text_color="gray", anchor="w", wraplength=450).pack(fill="x", padx=15, pady=(0, 12))
+        
+        # AI Provider
+        provider_frame = ctk.CTkFrame(scroll, fg_color="transparent")
+        provider_frame.pack(fill="x", padx=10, pady=(0, 15))
+        
+        ctk.CTkLabel(provider_frame, text="AI Provider", 
+            font=ctk.CTkFont(size=12, weight="bold"), anchor="w").pack(fill="x")
+        
+        self.yt_provider_var = ctk.StringVar(value="openai")
+        self.yt_provider_menu = ctk.CTkOptionMenu(provider_frame, height=38,
+            values=["openai", "gemini"], 
+            variable=self.yt_provider_var,
+            command=self.on_yt_provider_change)
+        self.yt_provider_menu.pack(fill="x", pady=(5, 0))
         
         # API Base URL
         url_frame = ctk.CTkFrame(scroll, fg_color="transparent")
@@ -818,7 +947,7 @@ class SettingsPage(ctk.CTkFrame):
         
         ctk.CTkButton(btn_frame, text="📋 Apply URL & Key to All", height=38,
             fg_color="gray",
-            command=lambda: self.apply_url_key_to_all_simple(self.yt_url_entry.get(), self.yt_key_entry.get())).pack(side="left", fill="x", expand=True, padx=(5, 0))
+            command=lambda: self.apply_url_key_to_all_simple(self.yt_url_entry.get(), self.yt_key_entry.get(), self.yt_provider_var.get())).pack(side="left", fill="x", expand=True, padx=(5, 0))
     
     def create_performance_tab(self):
         """Create performance settings tab with GPU detection"""
@@ -2095,6 +2224,8 @@ and YouTube Shorts."""
         
         # Highlight Finder
         hf = ai_providers.get("highlight_finder", {})
+        self.hf_provider_var.set(hf.get("provider_type", "openai"))
+        self.on_hf_provider_change(self.hf_provider_var.get())
         self.hf_url_entry.delete(0, "end")
         self.hf_url_entry.insert(0, hf.get("base_url", "https://api.openai.com/v1"))
         self.hf_key_entry.delete(0, "end")
@@ -2103,6 +2234,8 @@ and YouTube Shorts."""
         
         # Caption Maker
         cm = ai_providers.get("caption_maker", {})
+        self.cm_provider_var.set(cm.get("provider_type", "openai"))
+        self.on_cm_provider_change(self.cm_provider_var.get())
         self.cm_url_entry.delete(0, "end")
         self.cm_url_entry.insert(0, cm.get("base_url", "https://api.openai.com/v1"))
         self.cm_key_entry.delete(0, "end")
@@ -2112,6 +2245,8 @@ and YouTube Shorts."""
         
         # Hook Maker
         hm = ai_providers.get("hook_maker", {})
+        self.hm_provider_var.set(hm.get("provider_type", "openai"))
+        self.on_hm_provider_change(self.hm_provider_var.get())
         self.hm_url_entry.delete(0, "end")
         self.hm_url_entry.insert(0, hm.get("base_url", "https://api.openai.com/v1"))
         self.hm_key_entry.delete(0, "end")
@@ -2121,6 +2256,8 @@ and YouTube Shorts."""
         
         # YouTube Title Maker
         yt = ai_providers.get("youtube_title_maker", {})
+        self.yt_provider_var.set(yt.get("provider_type", "openai"))
+        self.on_yt_provider_change(self.yt_provider_var.get())
         self.yt_url_entry.delete(0, "end")
         self.yt_url_entry.insert(0, yt.get("base_url", "https://api.openai.com/v1"))
         self.yt_key_entry.delete(0, "end")
@@ -2228,21 +2365,25 @@ and YouTube Shorts."""
         # Collect AI provider configurations from entry fields
         ai_providers = {
             "highlight_finder": {
+                "provider_type": self.hf_provider_var.get(),
                 "base_url": self.hf_url_entry.get().strip() or "https://api.openai.com/v1",
                 "api_key": self.hf_key_entry.get().strip(),
                 "model": self.hf_model_var.get().strip()
             },
             "caption_maker": {
+                "provider_type": self.cm_provider_var.get(),
                 "base_url": self.cm_url_entry.get().strip() or "https://api.openai.com/v1",
                 "api_key": self.cm_key_entry.get().strip(),
                 "model": self.cm_model_entry.get().strip()
             },
             "hook_maker": {
+                "provider_type": self.hm_provider_var.get(),
                 "base_url": self.hm_url_entry.get().strip() or "https://api.openai.com/v1",
                 "api_key": self.hm_key_entry.get().strip(),
                 "model": self.hm_model_entry.get().strip()
             },
             "youtube_title_maker": {
+                "provider_type": self.yt_provider_var.get(),
                 "base_url": self.yt_url_entry.get().strip() or "https://api.openai.com/v1",
                 "api_key": self.yt_key_entry.get().strip(),
                 "model": self.yt_model_var.get().strip()
