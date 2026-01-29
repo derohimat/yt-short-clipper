@@ -685,6 +685,7 @@ Transcript:
                     auto_captions.append({"code": lang_code, "name": lang_name})
             
             return {
+                "title": video_data.get("title", "YouTube Video"),
                 "subtitles": subtitles,
                 "automatic_captions": auto_captions,
                 "error": None

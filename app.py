@@ -33,6 +33,8 @@ from pages.results_page import ResultsPage
 from pages.status_pages import APIStatusPage, LibStatusPage
 from pages.processing_page import ProcessingPage
 from pages.contact_page import ContactPage
+from utils.history_manager import HistoryManager
+from components.history_list import HistoryList
 
 # Fix for PyInstaller windowed mode (console=False)
 # When built with console=False, sys.stdout and sys.stderr are None
@@ -81,6 +83,8 @@ class YTShortClipperApp(ctk.CTk):
         self.token_usage = {"gpt_input": 0, "gpt_output": 0, "whisper_seconds": 0, "tts_chars": 0}
         self.youtube_connected = False
         self.youtube_channel = None
+        self.history_manager = HistoryManager(DATA_DIR / "history.json")
+        self.video_title = "YouTube Video"
         self.ytdlp_path = get_ytdlp_path()  # NEW: Store yt-dlp path for subtitle fetching
         
         self.title("YT Short Clipper")
@@ -336,6 +340,10 @@ class YTShortClipperApp(ctk.CTk):
             font=ctk.CTkFont(size=11), text_color=("#3B8ED0", "#1F6AA5"), cursor="hand2")
         browse_link.pack(pady=(0, 0))
         browse_link.bind("<Button-1>", lambda e: self.show_page("browse"))
+        
+        # History List
+        self.history_list = HistoryList(left_col, self.history_manager, self.resume_from_history)
+        self.history_list.pack(fill="both", expand=True)
         
         # Right column - Video Preview
         right_col = ctk.CTkFrame(main, fg_color="transparent")
@@ -733,7 +741,7 @@ class YTShortClipperApp(ctk.CTk):
                     self.after(0, lambda err_msg="No subtitles available": self.on_subtitle_error(err_msg))
                     return
                 
-                self.after(0, lambda: self.show_subtitle_selector(all_subs))
+                self.after(0, lambda: self.show_subtitle_selector(all_subs, result.get("title", "YouTube Video")))
                 
             except Exception as e:
                 debug_log(f"Exception in load_subtitles: {str(e)}")
@@ -756,8 +764,9 @@ class YTShortClipperApp(ctk.CTk):
         # Hide subtitle selector on error
         self.subtitle_frame.pack_forget()
     
-    def show_subtitle_selector(self, subtitles: list):
+    def show_subtitle_selector(self, subtitles: list, title: str = "YouTube Video"):
         """Show subtitle selector with available options"""
+        self.video_title = title
         # Hide loading
         self.subtitle_loading.pack_forget()
         
@@ -976,6 +985,16 @@ class YTShortClipperApp(ctk.CTk):
         output_dir = self.config.get("output_dir", str(OUTPUT_DIR))
         model = self.config.get("model", "gpt-4.1")
         
+        # Add to history
+        options = {
+            "num_clips": num_clips,
+            "add_captions": add_captions,
+            "add_hook": add_hook,
+            "subtitle_lang": subtitle_lang
+        }
+        self.history_manager.add_entry(url, self.video_title, "processing", options)
+        self.after(0, self.history_list.refresh)
+        
         threading.Thread(target=self.run_processing, args=(url, num_clips, output_dir, model, add_captions, add_hook, subtitle_lang), daemon=True).start()
     
     def run_processing(self, url, num_clips, output_dir, model, add_captions, add_hook, subtitle_lang="id"):
@@ -1127,6 +1146,11 @@ class YTShortClipperApp(ctk.CTk):
         elif "complete" in status_lower:
             for step in self.steps:
                 step.set_done("Complete")
+            
+            # Update history status
+            url = self.url_var.get()
+            self.history_manager.update_status(url, "success", title=self.video_title)
+            self.after(0, self.history_list.refresh)
     
     def update_tokens(self, gpt_in, gpt_out, whisper, tts):
         self.token_usage["gpt_input"] += gpt_in
@@ -1149,6 +1173,9 @@ class YTShortClipperApp(ctk.CTk):
     def on_cancelled(self):
         """Called when processing is cancelled"""
         self.processing = False
+        url = self.url_var.get()
+        self.history_manager.update_status(url, "cancelled")
+        self.after(0, self.history_list.refresh)
         self.pages["processing"].on_cancelled()
     
     def on_complete(self):
@@ -1164,7 +1191,42 @@ class YTShortClipperApp(ctk.CTk):
     
     def on_error(self, error):
         self.processing = False
+        url = self.url_var.get()
+        self.history_manager.update_status(url, "failed")
+        self.after(0, self.history_list.refresh)
         self.pages["processing"].on_error(error)
+    
+    def resume_from_history(self, entry):
+        """Resume or restart a process from history entry"""
+        if self.processing:
+            messagebox.showwarning("Processing", "Please wait for current process to finish or cancel it first.")
+            return
+            
+        # Set URL
+        url = entry.get("url", "")
+        self.url_var.set(url)
+        
+        # Set options if present
+        options = entry.get("options", {})
+        if "num_clips" in options:
+            self.clips_var.set(str(options["num_clips"]))
+        if "add_captions" in options:
+            self.caption_var.set(options["add_captions"])
+            self.update_caption_switch_text()
+        if "add_hook" in options:
+            self.hook_var.set(options["add_hook"])
+            self.update_hook_switch_text()
+        if "subtitle_lang" in options:
+            # We'll set the subtitle var, but it might get overwritten by on_url_change
+            # So we set a flag or just let it reload.
+            # For now, let's just set the URL and let it load.
+            pass
+            
+        # Switch to home page if not already there
+        self.show_page("home")
+        
+        # Re-fetch video info and subtitles automatically
+        self.on_url_change()
     
     def open_output(self):
         output_dir = self.config.get("output_dir", str(OUTPUT_DIR))
