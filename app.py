@@ -51,21 +51,29 @@ BUNDLE_DIR = get_bundle_dir()
 # Setup error logging to file (for production builds)
 setup_error_logging(DATA_DIR)
 
+IS_FROZEN = getattr(sys, 'frozen', False)
+
 # Migration: Move config.json from APP_DIR to DATA_DIR if present and not in new location
 OLD_CONFIG = APP_DIR / "config.json"
 NEW_CONFIG = DATA_DIR / "config.json"
 
-if OLD_CONFIG.exists() and not NEW_CONFIG.exists():
+if OLD_CONFIG.exists() and not NEW_CONFIG.exists() and IS_FROZEN:
     try:
         import shutil
         shutil.copy2(OLD_CONFIG, NEW_CONFIG)
-        # Keep old one for now just in case, but using the new one
-        # os.remove(OLD_CONFIG) 
     except Exception as e:
         print(f"Migration error: {e}")
 
-CONFIG_FILE = NEW_CONFIG
-OUTPUT_DIR = APP_DIR / "output" # Keep output in app dir or home dir? Maybe APP_DIR for now.
+# In development mode, prefer local config and data in current directory
+if not IS_FROZEN:
+    CONFIG_FILE = OLD_CONFIG
+    DATA_DIR = APP_DIR
+    debug_log("Running in Development Mode - Using local config and data")
+else:
+    CONFIG_FILE = NEW_CONFIG
+    debug_log(f"Running in Production Mode - Using system data dir: {DATA_DIR}")
+
+OUTPUT_DIR = APP_DIR / "output"
 ASSETS_DIR = BUNDLE_DIR / "assets"
 ICON_PATH = ASSETS_DIR / "icon.png"
 ICON_ICO_PATH = ASSETS_DIR / "icon.ico"
@@ -683,6 +691,7 @@ class YTShortClipperApp(ctk.CTk):
     
     def on_url_change(self, *args):
         url = self.url_var.get().strip()
+        debug_log(f"URL changed to: {url}") # DEBUG LOG
         video_id = extract_video_id(url)
         if video_id:
             self.load_thumbnail(video_id)
@@ -1201,6 +1210,9 @@ class YTShortClipperApp(ctk.CTk):
         if self.processing:
             messagebox.showwarning("Processing", "Please wait for current process to finish or cancel it first.")
             return
+
+        # Switch to home page first (resets UI)
+        self.show_page("home")
             
         # Set URL
         url = entry.get("url", "")
@@ -1217,16 +1229,7 @@ class YTShortClipperApp(ctk.CTk):
             self.hook_var.set(options["add_hook"])
             self.update_hook_switch_text()
         if "subtitle_lang" in options:
-            # We'll set the subtitle var, but it might get overwritten by on_url_change
-            # So we set a flag or just let it reload.
-            # For now, let's just set the URL and let it load.
             pass
-            
-        # Switch to home page if not already there
-        self.show_page("home")
-        
-        # Re-fetch video info and subtitles automatically
-        self.on_url_change()
     
     def open_output(self):
         output_dir = self.config.get("output_dir", str(OUTPUT_DIR))

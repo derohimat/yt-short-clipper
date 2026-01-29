@@ -41,21 +41,32 @@ def get_bundle_dir():
 
 def get_ffmpeg_path():
     """Get FFmpeg executable path"""
-    if getattr(sys, 'frozen', False):
-        ext = ".exe" if sys.platform == "win32" else ""
-        bundled = get_app_dir() / "ffmpeg" / f"ffmpeg{ext}"
-        if bundled.exists():
-            return str(bundled)
+    ext = ".exe" if sys.platform == "win32" else ""
+    
+    # 1. Check in bundled/local ffmpeg directory
+    local_path = get_app_dir() / "ffmpeg" / f"ffmpeg{ext}"
+    if local_path.exists():
+        return str(local_path)
+    
+    # 2. Check in app dir directly (alternate bundle)
+    alt_local = get_app_dir() / f"ffmpeg{ext}"
+    if alt_local.exists():
+        return str(alt_local)
+        
+    # 3. Fallback to system PATH
     return "ffmpeg"
 
 
 def get_ytdlp_path():
     """Get yt-dlp executable path"""
-    if getattr(sys, 'frozen', False):
-        ext = ".exe" if sys.platform == "win32" else ""
-        bundled = get_app_dir() / f"yt-dlp{ext}"
-        if bundled.exists():
-            return str(bundled)
+    ext = ".exe" if sys.platform == "win32" else ""
+    
+    # 1. Check in local project directory
+    local_path = get_app_dir() / f"yt-dlp{ext}"
+    if local_path.exists():
+        return str(local_path)
+        
+    # 2. Fallback to system PATH
     return "yt-dlp"
 
 

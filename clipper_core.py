@@ -524,24 +524,62 @@ Transcript:
         
         self.log(f"  Downloading video with {self.subtitle_language} subtitle (Quality: {self.video_quality})...")
         
-        # Clear yt-dlp cache to avoid old session tokens/403s
+        # Probe video info first to check available resolutions
+        self.log(f"  Probing video quality for: {url}")
         try:
-            subprocess.run([self.ytdlp_path, "--rm-cache-dir"], capture_output=True, check=False)
-        except:
-            pass
+            # Use specific extractor args to bypass 403/SABR
+            extractor_args = ["youtube:player_client=android,mweb;player_skip=webpage,configs"]
+            probe_cmd = [
+                self.ytdlp_path,
+                "--dump-json",
+                "--no-playlist",
+                "--force-ipv4",
+                "--socket-timeout", "30",
+                "--extractor-args", extractor_args[0],
+                "--add-header", "Accept-Language:en-US,en;q=0.9",
+                url
+            ]
+            info_proc = subprocess.run(probe_cmd, capture_output=True, text=True, creationflags=SUBPROCESS_FLAGS)
+            if info_proc.returncode == 0:
+                video_data = json.loads(info_proc.stdout)
+                formats = video_data.get("formats", [])
+                max_height = 0
+                for f in formats:
+                    h = f.get("height")
+                    if h and isinstance(h, int):
+                        max_height = max(max_height, h)
+                
+                self.log(f"  [DEBUG] Max resolution found: {max_height}p")
+                if max_height < 720:
+                    self.log(f"  ⚠ WARNING: This video only has {max_height}p max. Output will be blurry!")
+                elif max_height < 1080 and height >= 1080:
+                    self.log(f"  ⚠ Note: 1080p requested but only {max_height}p is available.")
+            else:
+                self.log("  [DEBUG] Failed to probe video quality (yt-dlp error)")
+        except Exception as e:
+            self.log(f"  [DEBUG] Error probing video quality: {e}")
             
+        # Improve format selection: Prefer high quality video+audio, but allow single 'best' fallback
+        # This handles cases where DASH formats (separate v/a) are much higher quality than single-file MP4s
+        format_string = f"bestvideo[height<={height}]+bestaudio/best[height<={height}]/best"
+        
+        self.log(f"  [DEBUG] yt-dlp format: {format_string}")
+        self.log(f"  [DEBUG] Using FFmpeg from: {self.ffmpeg_path}")
+        
         cmd = [
             self.ytdlp_path,
-            "-f", f"bestvideo[height<={height}][ext=mp4]+bestaudio[ext=m4a]/best[height<={height}][ext=mp4]/best[height<={height}]/best",
+            "-f", format_string,
             "--write-sub", "--write-auto-sub",
             "--sub-lang", self.subtitle_language,
             "--convert-subs", "srt",
             "--merge-output-format", "mp4",
             "--ffmpeg-location", self.ffmpeg_path,
             "--no-check-certificate",
-            "--prefer-free-formats",
+            "--force-ipv4",
+            "--socket-timeout", "30",
+            "--extractor-args", "youtube:player_client=android,mweb;player_skip=webpage,configs",
             "--add-header", "User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "--extractor-args", "youtube:player_client=web,mweb,public,ios",
+            "--add-header", "Accept-Language:en-US,en;q=0.9",
             "--newline",
             "-o", str(self.video_cache_dir / "source.%(ext)s"),
             url
@@ -987,6 +1025,7 @@ Transcript:
             self.log("  ⊘ Skipped captions (disabled)")
         
         # Step 5: Add watermark (if enabled)
+        self.log(f"  [DEBUG] Watermark check - Enabled: {self.watermark_settings.get('enabled')}")
         if self.watermark_settings.get("enabled"):
             if self.is_cancelled():
                 return
@@ -1091,7 +1130,12 @@ Transcript:
         target_ratio = 9 / 16
         crop_w = int(orig_h * target_ratio)
         crop_h = orig_h
-        out_w, out_h = 1080, 1920
+        
+        # Target resolution
+        if self.video_quality == "720p":
+            out_w, out_h = 720, 1280
+        else:
+            out_w, out_h = 1080, 1920
         
         # Face detector
         cascade_path = self._get_cascade_path()
@@ -1128,8 +1172,18 @@ Transcript:
         cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
         temp_video = tempfile.NamedTemporaryFile(suffix='.mp4', delete=False).name
         
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        # Use avc1 for Mac compatibility if possible, fallback to mp4v
+        fourcc_code = 'avc1' if sys.platform == 'darwin' else 'mp4v'
+        fourcc = cv2.VideoWriter_fourcc(*fourcc_code)
         out = cv2.VideoWriter(temp_video, fourcc, fps, (out_w, out_h))
+        
+        if not out.isOpened():
+            self.log(f"  ⚠ Warning: Failed to open video writer with codec '{fourcc_code}'. Falling back to 'mp4v'.")
+            # Fallback to mp4v if avc1 fails
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            out = cv2.VideoWriter(temp_video, fourcc, fps, (out_w, out_h))
+            if not out.isOpened():
+                raise Exception(f"Failed to open video writer even with 'mp4v' codec for {temp_video}")
         
         frame_idx = 0
         while True:
@@ -1244,7 +1298,11 @@ Transcript:
         target_ratio = 9 / 16
         crop_w = int(orig_h * target_ratio)
         crop_h = orig_h
-        out_w, out_h = 1080, 1920
+        # Target resolution
+        if self.video_quality == "720p":
+            out_w, out_h = 720, 1280
+        else:
+            out_w, out_h = 1080, 1920
         
         # MediaPipe Face Mesh settings
         lip_threshold = self.mediapipe_settings.get("lip_activity_threshold", 0.15)
@@ -2049,7 +2107,11 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         target_ratio = 9 / 16
         crop_w = int(orig_h * target_ratio)
         crop_h = orig_h
-        out_w, out_h = 1080, 1920
+        # Target resolution
+        if self.video_quality == "720p":
+            out_w, out_h = 720, 1280
+        else:
+            out_w, out_h = 1080, 1920
         
         # Face detector
         cascade_path = self._get_cascade_path()
@@ -2114,8 +2176,15 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
         temp_video = tempfile.NamedTemporaryFile(suffix='.mp4', delete=False).name
         
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        # Use avc1 for Mac compatibility if possible, fallback to mp4v
+        fourcc_code = 'avc1' if sys.platform == 'darwin' else 'mp4v'
+        fourcc = cv2.VideoWriter_fourcc(*fourcc_code)
         out = cv2.VideoWriter(temp_video, fourcc, fps, (out_w, out_h))
+        
+        if not out.isOpened():
+            # Fallback to mp4v
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            out = cv2.VideoWriter(temp_video, fourcc, fps, (out_w, out_h))
         
         if not out.isOpened():
             cap.release()
@@ -2266,7 +2335,11 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         target_ratio = 9 / 16
         crop_w = int(orig_h * target_ratio)
         crop_h = orig_h
-        out_w, out_h = 1080, 1920
+        # Target resolution
+        if self.video_quality == "720p":
+            out_w, out_h = 720, 1280
+        else:
+            out_w, out_h = 1080, 1920
         
         # MediaPipe settings
         lip_threshold = self.mediapipe_settings.get("lip_activity_threshold", 0.15)
@@ -2373,6 +2446,12 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             switch_threshold
         )
         progress_callback(0.45)
+        
+        progress_callback(0.4)
+        
+        # Apply smoothing to crop positions
+        self.log("[DEBUG] Smoothing camera movements...")
+        crop_positions = self.smooth_crop_positions(crop_positions, alpha=0.1)
         
         # Second pass: create video (45-85%)
         print("[DEBUG] Pass 2: Creating portrait video...")
@@ -2486,6 +2565,22 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             print(f"[WARNING] Failed to cleanup temp video: {e}")
             sys.stdout.flush()
     
+    
+    def smooth_crop_positions(self, positions, alpha=0.1):
+        """Apply exponential moving average smoothing to crop positions"""
+        if not positions:
+            return []
+            
+        smoothed = []
+        current = positions[0]
+        
+        for pos in positions:
+            # Apply EMA
+            current = (alpha * pos) + ((1 - alpha) * current)
+            smoothed.append(int(current))
+            
+        return smoothed
+
     def add_hook_with_progress(self, input_path: str, hook_text: str, output_path: str, progress_callback) -> float:
         """Add hook scene at the beginning with progress tracking"""
         
@@ -2924,8 +3019,15 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         """Add watermark overlay to video with progress tracking"""
         
         watermark_path = self.watermark_settings.get("image_path", "")
+        # Resolve path relative to app root if it's relative
+        if watermark_path and not Path(watermark_path).is_absolute():
+            from utils.helpers import get_app_dir
+            watermark_path = str(get_app_dir() / watermark_path)
+            
+        self.log(f"  [DEBUG] Applying watermark from: {watermark_path}")
+        
         if not watermark_path or not Path(watermark_path).exists():
-            self.log("  Warning: Watermark image not found, skipping")
+            self.log(f"  Warning: Watermark image not found at {watermark_path}, skipping")
             import shutil
             shutil.copy(input_path, output_path)
             return
