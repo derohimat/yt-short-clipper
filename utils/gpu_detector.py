@@ -58,6 +58,14 @@ class GPUDetector:
         if intel['available']:
             self._gpu_info = intel
             return intel
+            
+        # Try macOS
+        macos = self._detect_macos()
+        if macos['available']:
+            self._gpu_info = macos
+            return macos
+            
+
         
         self._gpu_info = gpu_info
         return gpu_info
@@ -290,7 +298,7 @@ class GPUDetector:
                 for line in output.split('\n'):
                     line = line.strip()
                     # Look for hardware encoder lines
-                    if any(enc in line for enc in ['h264_nvenc', 'h264_amf', 'h264_qsv', 'h264_mf']):
+                    if any(enc in line for enc in ['h264_nvenc', 'h264_amf', 'h264_qsv', 'h264_mf', 'h264_videotoolbox']):
                         # Extract encoder name (format: " V....D h264_nvenc ...")
                         parts = line.split()
                         if len(parts) >= 2:
@@ -339,8 +347,13 @@ class GPUDetector:
         preset_map = {
             'nvidia': 'p4',  # p1-p7, p4 is balanced
             'amd': 'balanced',
-            'intel': 'balanced'
+            'intel': 'balanced',
+            'macos': 'default' 
         }
+        
+        # Add macos mapping
+        if gpu['type'] == 'macos':
+             encoder_map['macos'] = 'h264_videotoolbox'
         
         recommended_encoder = encoder_map.get(gpu['type'])
         
@@ -409,7 +422,18 @@ class GPUDetector:
                 '-c:v', 'h264_qsv',
                 '-preset', preset,
                 '-global_quality', '19'
+
             ]
+            
+        elif encoder == 'h264_videotoolbox':
+            # macOS VideoToolbox
+            return [
+                '-c:v', 'h264_videotoolbox',
+                '-q:v', '60',
+                '-allow_sw', '1'
+            ]
+            
+
         
         # Fallback to CPU
         return ['-c:v', 'libx264', '-preset', 'fast', '-crf', '18']

@@ -43,6 +43,7 @@ class AutoClipperCore:
         ai_providers: dict = None,  # NEW: Multi-provider config
         subtitle_language: str = "id",  # NEW: Configurable subtitle language
         video_quality: str = "1080p",   # NEW: Configurable video quality
+        subtitle_style: dict = None,    # NEW: Configurable subtitle style
         log_callback=None,
         progress_callback=None,
         token_callback=None,
@@ -55,6 +56,21 @@ class AutoClipperCore:
         
         # New settings
         self.video_quality = video_quality
+        
+        # Default subtitle style (CapCut-like)
+        self.subtitle_style = {
+            "font_name": "Arial Black",
+            "font_size": 65,
+            "primary_color": "&H00FFFFFF",
+            "highlight_color": "&H00FFFF",  # Yellow in BGR
+            "outline_color": "&H00000000",
+            "back_color": "&H80000000",
+            "margin_v": 400,
+            "alignment": 2
+        }
+        if subtitle_style:
+            self.subtitle_style.update(subtitle_style)
+            
         # Multi-provider support
         self.ai_providers = ai_providers or {}
         
@@ -371,12 +387,41 @@ Transcript:
     def process(self, url: str, num_clips: int = 5, add_captions: bool = True, add_hook: bool = True):
         """Main processing pipeline with deterministic output and resume capability"""
         
-        from utils.helpers import extract_video_id
-        video_id = extract_video_id(url)
-        
-        # Step 1: Download video
-        self.set_progress("Downloading video...", 0.1)
-        video_path, srt_path, video_info = self.download_video(url)
+        # Check if local file
+        if os.path.exists(url) and os.path.isfile(url):
+            self.log(f"📂 Processing local video: {url}")
+            video_path = Path(url)
+            import hashlib
+            video_id = hashlib.md5(str(video_path).encode()).hexdigest()[:11]
+            video_info = {"title": video_path.stem, "id": video_id}
+            
+            # Check for SRT (language specific or generic)
+            possible_srts = [
+                video_path.parent / f"{video_path.stem}.{self.subtitle_language}.srt",
+                video_path.parent / f"{video_path.stem}.srt"
+            ]
+            
+            srt_path = None
+            for p in possible_srts:
+                if p.exists():
+                    srt_path = p
+                    break
+            
+            if not srt_path:
+                # TODO: Implement auto-transcription with Whisper if available
+                raise Exception(f"SRT file not found! Please place '{video_path.stem}.srt' in the same folder.")
+                
+            # Setup cache dir manually
+            self.video_cache_dir = self.output_dir / "cache" / video_id
+            self.video_cache_dir.mkdir(parents=True, exist_ok=True)
+            
+        else:
+            from utils.helpers import extract_video_id
+            video_id = extract_video_id(url)
+            
+            # Step 1: Download video
+            self.set_progress("Downloading video...", 0.1)
+            video_path, srt_path, video_info = self.download_video(url)
         
         if self.is_cancelled():
             return
@@ -1922,8 +1967,18 @@ Transcript:
     def create_ass_subtitle_capcut(self, transcript, output_path: str, time_offset: float = 0):
         """Create ASS subtitle file with CapCut-style word-by-word highlighting"""
         
-        # ASS header - CapCut style: white text, yellow highlight, black outline
-        ass_content = """[Script Info]
+        # Get style from config
+        s = self.subtitle_style
+        font = s.get("font_name", "Arial Black")
+        size = s.get("font_size", 65)
+        primary = s.get("primary_color", "&H00FFFFFF")
+        outline = s.get("outline_color", "&H00000000")
+        back = s.get("back_color", "&H80000000")
+        margin_v = s.get("margin_v", 400)
+        align = s.get("alignment", 2)
+        
+        # ASS header - Dynamic styling
+        ass_content = f"""[Script Info]
 Title: Auto-generated captions
 ScriptType: v4.00+
 WrapStyle: 0
@@ -1933,7 +1988,7 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,Arial Black,65,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,4,2,2,50,50,400,1
+Style: Default,{font},{size},{primary},&H000000FF,{outline},{back},-1,0,0,0,100,100,0,0,1,4,2,2,50,50,{margin_v},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -1959,13 +2014,15 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                     word_start = current_word.start + time_offset
                     word_end = current_word.end + time_offset
                     
-                    # Build text with current word highlighted in yellow
+                    highlight_color = self.subtitle_style.get("highlight_color", "&H00FFFF")
+                    
+                    # Build text with current word highlighted
                     text_parts = []
                     for k, w in enumerate(chunk):
                         word_text = w.word.strip().upper()
                         if k == j:
-                            # Highlight current word (yellow: &H00FFFF in BGR)
-                            text_parts.append(f"{{\\c&H00FFFF&}}{word_text}{{\\c&HFFFFFF&}}")
+                            # Highlight current word
+                            text_parts.append(f"{{\\c{highlight_color}}}{word_text}{{\\c{s.get('primary_color', '&H00FFFFFF')}}}")
                         else:
                             text_parts.append(word_text)
                     

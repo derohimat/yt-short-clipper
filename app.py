@@ -241,16 +241,24 @@ class YTShortClipperApp(ctk.CTk):
         
         self.url_var = ctk.StringVar()
         self.url_var.trace_add("write", self.on_url_change)
-        url_entry = ctk.CTkEntry(url_input_container, textvariable=self.url_var, 
-            placeholder_text="Paste YouTube link here...", height=40, border_width=0,
-            fg_color="transparent")
-        url_entry.pack(side="left", fill="x", expand=True, padx=(4, 8))
         
-        # Paste button
+        # Paste button (Right)
         paste_btn = ctk.CTkButton(url_input_container, text="📋 Paste", width=80, height=36,
             fg_color=("#3a3a3a", "#2a2a2a"), hover_color=("#4a4a4a", "#3a3a3a"),
             font=ctk.CTkFont(size=11), command=self.paste_url)
         paste_btn.pack(side="right")
+        
+        # Open File button (Right of input, left of paste)
+        open_btn = ctk.CTkButton(url_input_container, text="📂 Open", width=80, height=36,
+            fg_color=("#3a3a3a", "#2a2a2a"), hover_color=("#4a4a4a", "#3a3a3a"),
+            font=ctk.CTkFont(size=11), command=self.open_file)
+        open_btn.pack(side="right", padx=(0, 4))
+        
+        # URL Entry
+        url_entry = ctk.CTkEntry(url_input_container, textvariable=self.url_var, 
+            placeholder_text="Paste YouTube link or select local file...", height=40, border_width=0,
+            fg_color="transparent")
+        url_entry.pack(side="left", fill="x", expand=True, padx=(4, 8))
         
         # Subtitle selector (hidden by default)
         self.subtitle_frame = ctk.CTkFrame(url_frame, fg_color="transparent")
@@ -396,6 +404,15 @@ class YTShortClipperApp(ctk.CTk):
             font=ctk.CTkFont(size=13), text_color="gray", justify="center")
         self.thumb_label.pack()
     
+    def open_file(self):
+        """Open file dialog to select local video"""
+        filename = filedialog.askopenfilename(
+            title="Select Video File",
+            filetypes=(("Video files", "*.mp4 *.mov *.mkv *.avi *.webm"), ("All files", "*.*"))
+        )
+        if filename:
+            self.url_var.set(filename)
+
     def paste_url(self):
         """Paste URL from clipboard"""
         try:
@@ -962,8 +979,10 @@ class YTShortClipperApp(ctk.CTk):
             return
         
         url = self.url_var.get().strip()
-        if not extract_video_id(url):
-            messagebox.showerror("Error", "Enter a valid YouTube URL!")
+        is_local = os.path.exists(url) and os.path.isfile(url)
+        
+        if not is_local and not extract_video_id(url):
+            messagebox.showerror("Error", "Enter a valid YouTube URL or select a local file!")
             return
         try:
             num_clips = int(self.clips_var.get())
@@ -1032,6 +1051,7 @@ class YTShortClipperApp(ctk.CTk):
             })
             
             video_quality = self.config.get("video_quality", "1080p")
+            subtitle_style = self.config.get("subtitle_style", None)
             
             core = AutoClipperCore(
                 client=self.client,
@@ -1048,6 +1068,7 @@ class YTShortClipperApp(ctk.CTk):
                 ai_providers=self.config.get("ai_providers"),  # NEW: Pass multi-provider config
                 subtitle_language=subtitle_lang,  # NEW: Pass selected subtitle language
                 video_quality=video_quality, # NEW: Pass selected video quality
+                subtitle_style=subtitle_style, # NEW: Pass subtitle style
                 log_callback=log_with_debug,
                 progress_callback=lambda s, p: self.after(0, lambda s=s, p=p: self.update_progress(s, p)),
                 token_callback=lambda a, b, c, d: self.after(0, lambda a=a, b=b, c=c, d=d: self.update_tokens(a, b, c, d)),
