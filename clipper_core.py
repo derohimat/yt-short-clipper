@@ -1130,6 +1130,7 @@ Transcript:
                 self.log(f"  Warning: Could not delete temp_hooked.mp4: {e}")
         
         # Save metadata
+        # Save metadata
         metadata = {
             "title": highlight["title"],
             "hook_text": highlight.get("hook_text", highlight["title"]),
@@ -1139,9 +1140,17 @@ Transcript:
             "has_hook": add_hook,
             "has_captions": add_captions,
             "has_watermark": self.watermark_settings.get("enabled", False),
+            "video_path": str(video_path),
+            "original_file": video_path.name
         }
         
-        with open(clip_dir / "data.json", "w", encoding="utf-8") as f:
+        # Determine metadata path
+        if output_parent_dir:
+            metadata_path = final_file.with_suffix('.json')
+        else:
+            metadata_path = clip_dir / "data.json"
+            
+        with open(metadata_path, "w", encoding="utf-8") as f:
             json.dump(metadata, f, ensure_ascii=False, indent=2)
     
     def convert_to_portrait(self, input_path: str, output_path: str):

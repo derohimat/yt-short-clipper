@@ -115,105 +115,153 @@ class BrowsePage(ctk.CTkFrame):
             ctk.CTkLabel(self.list_frame, text="📂 Output folder not found", 
                 font=ctk.CTkFont(size=13), text_color="gray").pack(pady=30)
             return
+            
+        # Collect all valid clips (Legacy + Modern)
+        all_clips = []
         
-        # Find all clip folders
-        clip_folders = sorted([d for d in output_dir.iterdir() if d.is_dir() and not d.name.startswith("_")], reverse=True)
+        # Iterate top-level folders
+        try:
+            for item in output_dir.iterdir():
+                if not item.is_dir() or item.name.startswith("_"):
+                    continue
+                    
+                # 1. Check for Legacy Format (Timestamp folder -> master.mp4)
+                legacy_data = item / "data.json"
+                legacy_video = item / "master.mp4"
+                
+                if legacy_data.exists() and legacy_video.exists():
+                    all_clips.append({
+                        "folder": item,
+                        "video": legacy_video,
+                        "data": legacy_data,
+                        "timestamp": item.stat().st_mtime
+                    })
+                    continue
+                
+                # 2. Check for Modern Format (Title folder -> multiple .mp4 files)
+                # Scan for MP4 files first, then look for metadata
+                for video_file in item.glob("*.mp4"):
+                    if video_file.name == "master.mp4": continue # Handled by Legacy check
+                    
+                    # Look for metadata (Next to file OR in _work folder)
+                    json_file = video_file.with_suffix(".json")
+                    
+                    if not json_file.exists():
+                        # Try to find it in the work folder (Backward compatibility for existing clips)
+                        work_dir = item / (video_file.stem + "_work")
+                        possible_data = work_dir / "data.json"
+                        if work_dir.exists() and possible_data.exists():
+                            json_file = possible_data
+                    
+                    if json_file.exists():
+                        all_clips.append({
+                            "folder": item,
+                            "video": video_file,
+                            "data": json_file,
+                            "timestamp": video_file.stat().st_mtime
+                        })
+        except Exception as e:
+            print(f"Error scanning output folder: {e}")
+
+        # Sort clips by processing time (newest first)
+        all_clips.sort(key=lambda x: x["timestamp"], reverse=True)
         
-        if not clip_folders:
+        if not all_clips:
             ctk.CTkLabel(self.list_frame, text="📹 No videos found\n\nProcess a video to see it here", 
                 font=ctk.CTkFont(size=13), text_color="gray", justify="center").pack(pady=30)
             return
         
-        # Create list items with thumbnails
-        for folder in clip_folders[:50]:  # Limit to 50
-            data_file = folder / "data.json"
-            master_file = folder / "master.mp4"
+        # Create list items
+        for clip in all_clips[:50]:  # Limit to 50
+            folder = clip["folder"]
+            master_file = clip["video"]
+            data_file = clip["data"]
             
-            if data_file.exists() and master_file.exists():
-                try:
-                    with open(data_file, "r", encoding="utf-8") as f:
-                        data = json.load(f)
+            try:
+                with open(data_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                
+                # Create list item
+                item = ctk.CTkFrame(self.list_frame, fg_color=("gray85", "gray20"), corner_radius=10)
+                item.pack(fill="x", pady=5, padx=5)
+                
+                # Main content frame (horizontal layout)
+                content_frame = ctk.CTkFrame(item, fg_color="transparent")
+                content_frame.pack(fill="x", padx=12, pady=12)
+                
+                # Thumbnail on left
+                thumb_frame = ctk.CTkFrame(content_frame, width=140, height=80, fg_color=("gray75", "gray30"), corner_radius=8)
+                thumb_frame.pack(side="left")
+                thumb_frame.pack_propagate(False)
+                
+                # Load thumbnail async
+                self.load_thumbnail(master_file, thumb_frame)
+                
+                # Info in middle
+                info = ctk.CTkFrame(content_frame, fg_color="transparent")
+                info.pack(side="left", fill="both", expand=True, padx=(12, 12))
+                
+                # Title with YouTube badge if uploaded
+                title_frame = ctk.CTkFrame(info, fg_color="transparent")
+                title_frame.pack(fill="x")
+                
+                title = data.get("title", "Untitled")[:50]
+                title_label = ctk.CTkLabel(title_frame, text=title, font=ctk.CTkFont(size=13, weight="bold"), 
+                    anchor="w")
+                title_label.pack(side="left", fill="x", expand=True)
+                
+                # YouTube badge if uploaded
+                if data.get("youtube_url"):
+                    yt_badge = ctk.CTkLabel(title_frame, text="▶️", font=ctk.CTkFont(size=12), 
+                        text_color="#c4302b", cursor="hand2")
+                    yt_badge.pack(side="right", padx=(5, 0))
                     
-                    # Create list item
-                    item = ctk.CTkFrame(self.list_frame, fg_color=("gray85", "gray20"), corner_radius=10)
-                    item.pack(fill="x", pady=5, padx=5)
-                    
-                    # Main content frame (horizontal layout)
-                    content_frame = ctk.CTkFrame(item, fg_color="transparent")
-                    content_frame.pack(fill="x", padx=12, pady=12)
-                    
-                    # Thumbnail on left
-                    thumb_frame = ctk.CTkFrame(content_frame, width=140, height=80, fg_color=("gray75", "gray30"), corner_radius=8)
-                    thumb_frame.pack(side="left")
-                    thumb_frame.pack_propagate(False)
-                    
-                    # Load thumbnail async
-                    self.load_thumbnail(master_file, thumb_frame)
-                    
-                    # Info in middle
-                    info = ctk.CTkFrame(content_frame, fg_color="transparent")
-                    info.pack(side="left", fill="both", expand=True, padx=(12, 12))
-                    
-                    # Title with YouTube badge if uploaded
-                    title_frame = ctk.CTkFrame(info, fg_color="transparent")
-                    title_frame.pack(fill="x")
-                    
-                    title = data.get("title", "Untitled")[:50]
-                    title_label = ctk.CTkLabel(title_frame, text=title, font=ctk.CTkFont(size=13, weight="bold"), 
-                        anchor="w")
-                    title_label.pack(side="left", fill="x", expand=True)
-                    
-                    # YouTube badge if uploaded
-                    if data.get("youtube_url"):
-                        yt_badge = ctk.CTkLabel(title_frame, text="▶️", font=ctk.CTkFont(size=12), 
-                            text_color="#c4302b", cursor="hand2")
-                        yt_badge.pack(side="right", padx=(5, 0))
-                        
-                        # Make badge clickable to open YouTube
-                        yt_url = data.get("youtube_url")
-                        yt_badge.bind("<Button-1>", lambda e, url=yt_url: self.open_youtube_url(url))
-                    
-                    duration = data.get("duration_seconds", 0)
-                    hook = data.get("hook_text", "")[:40]
-                    subtitle_label = ctk.CTkLabel(info, text=f"⏱️ {duration:.0f}s • {hook}...", 
-                        font=ctk.CTkFont(size=11), text_color="gray", anchor="w")
-                    subtitle_label.pack(fill="x", pady=(3, 0))
-                    
-                    date_label = ctk.CTkLabel(info, text=f"📅 {folder.name}", 
-                        font=ctk.CTkFont(size=10), text_color="gray", anchor="w")
-                    date_label.pack(fill="x", pady=(2, 0))
-                    
-                    # Action buttons below date (horizontal layout)
-                    btn_row = ctk.CTkFrame(info, fg_color="transparent")
-                    btn_row.pack(fill="x", pady=(8, 0))
-                    
-                    # Play button
-                    play_btn = ctk.CTkButton(btn_row, text="▶ Play Video", height=32,
-                        font=ctk.CTkFont(size=11), fg_color=("#3B8ED0", "#1F6AA5"),
-                        command=lambda v=master_file: self.play_video(v))
-                    play_btn.pack(side="left", padx=(0, 5))
-                    
-                    # YouTube upload button (or uploaded indicator)
-                    if data.get("youtube_url"):
-                        yt_btn = ctk.CTkButton(btn_row, text="✓ Uploaded to YouTube", height=32,
-                            font=ctk.CTkFont(size=11), fg_color="#27ae60", text_color="white",
-                            state="disabled", hover_color="#27ae60")
-                        yt_btn.pack(side="left", padx=(0, 5))
-                    else:
-                        yt_btn = ctk.CTkButton(btn_row, text="⬆ Upload to YouTube", height=32,
-                            font=ctk.CTkFont(size=11), fg_color="#c4302b", hover_color="#ff0000",
-                            command=lambda f=folder, v=master_file, d=data: self.upload_video_from_card(f, v, d))
-                        yt_btn.pack(side="left", padx=(0, 5))
-                    
-                    # Repliz upload button
-                    repliz_btn = ctk.CTkButton(btn_row, text="📤 Upload via Repliz", height=32,
-                        font=ctk.CTkFont(size=11), fg_color=("#2196F3", "#1976D2"), 
-                        hover_color=("#1976D2", "#1565C0"),
-                        command=lambda f=folder, v=master_file, d=data: self.upload_via_repliz(f, v, d))
-                    repliz_btn.pack(side="left", padx=(0, 0))
-                    
-                except:
-                    pass
+                    # Make badge clickable to open YouTube
+                    yt_url = data.get("youtube_url")
+                    yt_badge.bind("<Button-1>", lambda e, url=yt_url: self.open_youtube_url(url))
+                
+                duration = data.get("duration_seconds", 0)
+                hook = data.get("hook_text", "")[:40]
+                subtitle_label = ctk.CTkLabel(info, text=f"⏱️ {duration:.0f}s • {hook}...", 
+                    font=ctk.CTkFont(size=11), text_color="gray", anchor="w")
+                subtitle_label.pack(fill="x", pady=(3, 0))
+                
+                date_label = ctk.CTkLabel(info, text=f"📅 {folder.name}", 
+                    font=ctk.CTkFont(size=10), text_color="gray", anchor="w")
+                date_label.pack(fill="x", pady=(2, 0))
+                
+                # Action buttons below date (horizontal layout)
+                btn_row = ctk.CTkFrame(info, fg_color="transparent")
+                btn_row.pack(fill="x", pady=(8, 0))
+                
+                # Play button
+                play_btn = ctk.CTkButton(btn_row, text="▶ Play Video", height=32,
+                    font=ctk.CTkFont(size=11), fg_color=("#3B8ED0", "#1F6AA5"),
+                    command=lambda v=master_file: self.play_video(v))
+                play_btn.pack(side="left", padx=(0, 5))
+                
+                # YouTube upload button (or uploaded indicator)
+                if data.get("youtube_url"):
+                    yt_btn = ctk.CTkButton(btn_row, text="✓ Uploaded to YouTube", height=32,
+                        font=ctk.CTkFont(size=11), fg_color="#27ae60", text_color="white",
+                        state="disabled", hover_color="#27ae60")
+                    yt_btn.pack(side="left", padx=(0, 5))
+                else:
+                    yt_btn = ctk.CTkButton(btn_row, text="⬆ Upload to YouTube", height=32,
+                        font=ctk.CTkFont(size=11), fg_color="#c4302b", hover_color="#ff0000",
+                        command=lambda f=folder, v=master_file, d=data: self.upload_video_from_card(f, v, d))
+                    yt_btn.pack(side="left", padx=(0, 5))
+                
+                # Repliz upload button
+                repliz_btn = ctk.CTkButton(btn_row, text="📤 Upload via Repliz", height=32,
+                    font=ctk.CTkFont(size=11), fg_color=("#2196F3", "#1976D2"), 
+                    hover_color=("#1976D2", "#1565C0"),
+                    command=lambda f=folder, v=master_file, d=data: self.upload_via_repliz(f, v, d))
+                repliz_btn.pack(side="left", padx=(0, 0))
+                
+            except Exception as e:
+                print(f"Error loading clip item: {e}")
+
     
     def load_thumbnail(self, video_path: Path, frame: ctk.CTkFrame):
         """Load thumbnail from video file"""
