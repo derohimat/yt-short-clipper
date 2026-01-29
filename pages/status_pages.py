@@ -187,18 +187,28 @@ class APIStatusPage(ctk.CTkFrame):
                             # Try to list models to verify API connection
                             models_response = genai.list_models()
                             # Convert models_response to a list of names for matching
-                            available_models = [m.name for m in models_response]
-                            short_names = [name.split('/')[-1] for name in available_models]
+                            # Convert models_response to a list of names for matching
+                            available_models = [m.display_name for m in models_response]
+                            short_names = [m.name.split('/')[-1] for m in genai.list_models()]
                             
-                            # Check for matches (exact, short name, or partial)
-                            if any(model.lower() == name.lower() for name in short_names) or \
-                               any(model.lower() == name.lower() for name in available_models) or \
-                               any(model.lower() in name.lower() for name in short_names):
-                                
+                            # Log for debugging (will show in terminal)
+                            print(f"[DEBUG] Gemini Models found: {len(short_names)}")
+                            if not short_names:
+                                self.after(0, lambda sl=status_label, info_l=il: (
+                                    sl.configure(text="⚠ No models found", text_color="orange"),
+                                    info_l.configure(text="API key works, but no models found. Check API activation in GCP.")
+                                ))
+                                continue
+                            model_str = str(model).strip().lower()
+                            is_match = any(model_str == name.lower() for name in short_names) or \
+                                       any(model_str == name.lower() for name in available_models) or \
+                                       any(model_str in name.lower() for name in short_names)
+                            
+                            if is_match:
                                 # Find the actual name for display
                                 display_name = model
                                 for name in short_names:
-                                    if model.lower() in name.lower():
+                                    if model_str in name.lower():
                                         display_name = name
                                         break
 
@@ -207,15 +217,17 @@ class APIStatusPage(ctk.CTkFrame):
                                     info_l.configure(text=f"Model: {m}")
                                 ))
                             else:
-                                self.after(0, lambda sl=status_label, info_l=il, m=model: (
+                                # Suggest available models
+                                suggestions = ", ".join(short_names[:8])
+                                self.after(0, lambda sl=status_label, info_l=il, m=model, s=suggestions, total=len(short_names): (
                                     sl.configure(text="⚠ Model not found", text_color="orange"),
-                                    info_l.configure(text=f"Model '{m}' not in available Gemini models")
+                                    info_l.configure(text=f"Model '{m}' not found. Found {total} models: {s}...")
                                 ))
                         except Exception as list_err:
-                            # If listing fails but we have a key, consider it configured at least
-                            self.after(0, lambda sl=status_label, info_l=il, m=model: (
-                                sl.configure(text="✓ Configured", text_color="green"),
-                                info_l.configure(text=f"Model: {m} (Could not verify availability)")
+                            error_details = str(list_err)
+                            self.after(0, lambda sl=status_label, info_l=il, m=model, err=error_details: (
+                                sl.configure(text="✗ API Error", text_color="red"),
+                                info_l.configure(text=f"Error listing models: {err[:100]}")
                             ))
                     else:
                         from openai import OpenAI
@@ -252,9 +264,9 @@ class APIStatusPage(ctk.CTkFrame):
                     
                 except Exception as e:
                     error_msg = str(e)[:60]
-                    self.after(0, lambda sl=status_label, il=info_label, err=error_msg: (
+                    self.after(0, lambda sl=status_label, info_l=il, err=error_msg: (
                         sl.configure(text="✗ Error", text_color="red"),
-                        il.configure(text=f"Error: {err}")
+                        info_l.configure(text=f"Error: {err}")
                     ))
             
             # Check YouTube status

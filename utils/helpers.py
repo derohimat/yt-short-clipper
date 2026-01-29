@@ -7,11 +7,29 @@ import re
 from pathlib import Path
 
 
+import os
+
 def get_app_dir():
-    """Get application directory"""
+    """Get executable/application directory (where binaries are)"""
     if getattr(sys, 'frozen', False):
+        if sys.platform == 'darwin':
+            # On macOS, sys.executable is inside the .app bundle
+            return Path(sys.executable).parent
         return Path(sys.executable).parent
     return Path(__file__).parent.parent
+
+
+def get_data_dir():
+    """Get persistent data directory (for config, logs, etc.)"""
+    if sys.platform == 'win32':
+        data_dir = Path(os.environ.get('APPDATA', Path.home() / 'AppData' / 'Roaming')) / 'YTShortClipper'
+    elif sys.platform == 'darwin':
+        data_dir = Path.home() / 'Library' / 'Application Support' / 'YTShortClipper'
+    else:
+        data_dir = Path.home() / '.config' / 'yt-short-clipper'
+    
+    data_dir.mkdir(parents=True, exist_ok=True)
+    return data_dir
 
 
 def get_bundle_dir():

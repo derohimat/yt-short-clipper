@@ -21,7 +21,7 @@ from PIL import Image, ImageTk
 from version import __version__, UPDATE_CHECK_URL
 
 # Import utilities
-from utils.helpers import get_app_dir, get_bundle_dir, get_ffmpeg_path, get_ytdlp_path, extract_video_id
+from utils.helpers import get_app_dir, get_bundle_dir, get_data_dir, get_ffmpeg_path, get_ytdlp_path, extract_video_id
 from utils.logger import debug_log, setup_error_logging, log_error, get_error_log_path
 from config.config_manager import ConfigManager
 from dialogs.model_selector import SearchableModelDropdown
@@ -43,13 +43,27 @@ if sys.stderr is None:
     sys.stderr = open(os.devnull, 'w')
 
 APP_DIR = get_app_dir()
+DATA_DIR = get_data_dir()
 BUNDLE_DIR = get_bundle_dir()
 
 # Setup error logging to file (for production builds)
-setup_error_logging(APP_DIR)
+setup_error_logging(DATA_DIR)
 
-CONFIG_FILE = APP_DIR / "config.json"
-OUTPUT_DIR = APP_DIR / "output"
+# Migration: Move config.json from APP_DIR to DATA_DIR if present and not in new location
+OLD_CONFIG = APP_DIR / "config.json"
+NEW_CONFIG = DATA_DIR / "config.json"
+
+if OLD_CONFIG.exists() and not NEW_CONFIG.exists():
+    try:
+        import shutil
+        shutil.copy2(OLD_CONFIG, NEW_CONFIG)
+        # Keep old one for now just in case, but using the new one
+        # os.remove(OLD_CONFIG) 
+    except Exception as e:
+        print(f"Migration error: {e}")
+
+CONFIG_FILE = NEW_CONFIG
+OUTPUT_DIR = APP_DIR / "output" # Keep output in app dir or home dir? Maybe APP_DIR for now.
 ASSETS_DIR = BUNDLE_DIR / "assets"
 ICON_PATH = ASSETS_DIR / "icon.png"
 ICON_ICO_PATH = ASSETS_DIR / "icon.ico"
@@ -413,8 +427,8 @@ class YTShortClipperApp(ctk.CTk):
                     self.after(0, self._on_caption_validation_success)
                     
                 except Exception as e:
-                    error_msg = str(e)[:100]
-                    self.after(0, lambda: self._on_caption_validation_failed(error_msg))
+                    err_msg = str(e)
+                    self.after(0, lambda err=err_msg: self._on_caption_validation_failed(err))
             
             threading.Thread(target=validate_caption_api, daemon=True).start()
             return
@@ -452,11 +466,11 @@ class YTShortClipperApp(ctk.CTk):
                     model = hm_config.get("model", "").strip()
                     
                     if not api_key or not model:
-                        self.after(0, lambda: self._on_hook_validation_failed("API Key or Model not configured"))
+                        self.after(0, lambda err_msg="API Key or Model not configured": self._on_hook_validation_failed(err_msg))
                         return
                     
                     if provider_type == "gemini":
-                        self.after(0, lambda: self._on_hook_validation_failed("Gemini does not support TTS yet. Please use OpenAI for Hook Maker."))
+                        self.after(0, lambda err_msg="Gemini is an AI 'Brain' and does not support TTS (Voice) yet.\n\nTo use hooks with Google, you would need Google Cloud TTS (Service Account).\n\nRECOMMENDATION:\n1. Keep Hook OFF\n2. OR configure a small OpenAI balance specifically for Voice.": self._on_hook_validation_failed(err_msg))
                         return
                         
                     # Test API connection
@@ -472,8 +486,8 @@ class YTShortClipperApp(ctk.CTk):
                     self.after(0, self._on_hook_validation_success)
                     
                 except Exception as e:
-                    error_msg = str(e)[:100]
-                    self.after(0, lambda: self._on_hook_validation_failed(error_msg))
+                    err_msg = str(e)
+                    self.after(0, lambda err=err_msg: self._on_hook_validation_failed(err))
             
             threading.Thread(target=validate_hook_api, daemon=True).start()
             return
@@ -580,6 +594,14 @@ class YTShortClipperApp(ctk.CTk):
                 if hasattr(self, 'api_dot'):
                     self.api_dot.configure(text_color="#27ae60")  # Green
                     self.api_status_label.configure(text=model[:15] if model else "Connected")
+                
+                # Check for Gemini Hook Maker compatibility
+                ai_providers = self.config.get("ai_providers", {})
+                hm_config = ai_providers.get("hook_maker", {})
+                if hm_config.get("provider_type") == "gemini" and self.hook_var.get():
+                    self.hook_var.set(False)
+                    self.update_hook_switch_text()
+                    debug_log("Disabled Hook feature because Hook Maker is set to Gemini (No TTS support)")
             except:
                 if hasattr(self, 'api_dot'):
                     self.api_dot.configure(text_color="#e74c3c")  # Red
@@ -644,7 +666,7 @@ class YTShortClipperApp(ctk.CTk):
         if provider_type == "gemini":
             import google.generativeai as genai
             genai.configure(api_key=api_key)
-            return genai.GenerativeModel(yt_config.get("model", "gemini-1.5-flash"))
+            return genai.GenerativeModel(yt_config.get("model", "gemini-2.5-pro"))
         else:
             return OpenAI(
                 api_key=api_key,
@@ -683,7 +705,7 @@ class YTShortClipperApp(ctk.CTk):
                 
                 if result.get("error"):
                     debug_log(f"Subtitle error: {result['error']}")
-                    self.after(0, lambda: self.on_subtitle_error(result["error"]))
+                    self.after(0, lambda r_err=result["error"]: self.on_subtitle_error(r_err))
                     return
                 
                 # Combine manual and auto-generated subtitles
@@ -708,7 +730,7 @@ class YTShortClipperApp(ctk.CTk):
                 debug_log(f"Total subtitles found: {len(all_subs)}")
                 
                 if not all_subs:
-                    self.after(0, lambda: self.on_subtitle_error("No subtitles available"))
+                    self.after(0, lambda err_msg="No subtitles available": self.on_subtitle_error(err_msg))
                     return
                 
                 self.after(0, lambda: self.show_subtitle_selector(all_subs))
@@ -717,7 +739,8 @@ class YTShortClipperApp(ctk.CTk):
                 debug_log(f"Exception in load_subtitles: {str(e)}")
                 import traceback
                 debug_log(traceback.format_exc())
-                self.after(0, lambda: self.on_subtitle_error(str(e)))
+                err_msg = str(e)
+                self.after(0, lambda err=err_msg: self.on_subtitle_error(err))
         
         threading.Thread(target=fetch, daemon=True).start()
     
@@ -872,7 +895,7 @@ class YTShortClipperApp(ctk.CTk):
                 hf_config = ai_providers.get("highlight_finder", {})
                 success, error = validate_api_provider(hf_config, "Highlight Finder")
                 if not success:
-                    self.after(0, lambda: self._on_validation_failed(error))
+                    self.after(0, lambda err=error: self._on_validation_failed(err))
                     return
                 
                 # Check Caption Maker if enabled
@@ -880,7 +903,7 @@ class YTShortClipperApp(ctk.CTk):
                     cm_config = ai_providers.get("caption_maker", {})
                     success, error = validate_api_provider(cm_config, "Caption Maker")
                     if not success:
-                        self.after(0, lambda: self._on_validation_failed(error + "\n\n(Disable 'Auto Captions' if not using Whisper/Gemini)"))
+                        self.after(0, lambda err=error + "\n\n(Disable 'Auto Captions' if not using Whisper/Gemini)": self._on_validation_failed(err))
                         return
                 
                 # Check Hook Maker if enabled
@@ -892,16 +915,17 @@ class YTShortClipperApp(ctk.CTk):
                     if not success:
                          # Special case: Gemini doesn't have TTS, it will use OpenAI fallback
                          if hm_config.get("provider_type") == "gemini":
-                             self.after(0, lambda: self._on_validation_failed("Hook Maker is set to Gemini, but Gemini doesn't support TTS yet.\nPlease set Hook Maker to OpenAI in Settings."))
+                             self.after(0, lambda err="Hook Maker is set to Gemini, but Gemini doesn't support TTS yet.\nPlease set Hook Maker to OpenAI in Settings.": self._on_validation_failed(err))
                              return
-                         self.after(0, lambda: self._on_validation_failed(error))
+                         self.after(0, lambda err=error: self._on_validation_failed(err))
                          return
                 
                 # All validations passed, proceed with processing
                 self.after(0, self._start_processing_validated)
                 
             except Exception as e:
-                self.after(0, lambda: self._on_validation_failed(f"Validation error: {str(e)[:100]}"))
+                err_msg = str(e)
+                self.after(0, lambda err=err_msg: self._on_validation_failed(f"Validation error: {err[:100]}"))
         
         threading.Thread(target=validate_and_start, daemon=True).start()
     
@@ -961,7 +985,7 @@ class YTShortClipperApp(ctk.CTk):
             # Wrapper for log callback that also logs to console in debug mode
             def log_with_debug(msg):
                 debug_log(msg)
-                self.after(0, lambda: self.update_status(msg))
+                self.after(0, lambda m=msg: self.update_status(m))
             
             # Get system prompt from config
             system_prompt = self.config.get("system_prompt", None)
@@ -979,6 +1003,8 @@ class YTShortClipperApp(ctk.CTk):
                 "center_weight": 0.3
             })
             
+            video_quality = self.config.get("video_quality", "1080p")
+            
             core = AutoClipperCore(
                 client=self.client,
                 ffmpeg_path=get_ffmpeg_path(),
@@ -993,9 +1019,10 @@ class YTShortClipperApp(ctk.CTk):
                 mediapipe_settings=mediapipe_settings,
                 ai_providers=self.config.get("ai_providers"),  # NEW: Pass multi-provider config
                 subtitle_language=subtitle_lang,  # NEW: Pass selected subtitle language
+                video_quality=video_quality, # NEW: Pass selected video quality
                 log_callback=log_with_debug,
-                progress_callback=lambda s, p: self.after(0, lambda: self.update_progress(s, p)),
-                token_callback=lambda a, b, c, d: self.after(0, lambda: self.update_tokens(a, b, c, d)),
+                progress_callback=lambda s, p: self.after(0, lambda s=s, p=p: self.update_progress(s, p)),
+                token_callback=lambda a, b, c, d: self.after(0, lambda a=a, b=b, c=c, d=d: self.update_tokens(a, b, c, d)),
                 cancel_check=lambda: self.cancelled
             )
             
@@ -1172,7 +1199,7 @@ class YTShortClipperApp(ctk.CTk):
                 
                 if latest_version and self._compare_versions(latest_version, __version__) > 0:
                     # New version available
-                    self.after(0, lambda: self._show_update_notification(latest_version, download_url, changelog))
+                    self.after(0, lambda lv=latest_version, url=download_url, c=changelog: self._show_update_notification(lv, url, c))
         except Exception as e:
             debug_log(f"Update check failed: {e}")
     

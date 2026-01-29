@@ -31,6 +31,34 @@ class SettingsPage(ctk.CTkFrame):
         
         self.create_ui()
         self.load_config()
+        
+        # Apply scroll fix to all tabs after a short delay to ensure UI is ready
+        self.after(500, self.apply_scroll_fix)
+
+    def _bind_mousewheel_recursively(self, widget, scrollable_frame):
+        """Helper to bind mouse wheel events to all children of a scrollable frame"""
+        widget.bind("<MouseWheel>", lambda e: scrollable_frame._canvas.yview_scroll(int(-1*(e.delta/120)), "units"))
+        # For Linux
+        widget.bind("<Button-4>", lambda e: scrollable_frame._canvas.yview_scroll(-1, "units"))
+        widget.bind("<Button-5>", lambda e: scrollable_frame._canvas.yview_scroll(1, "units"))
+        
+        for child in widget.winfo_children():
+            self._bind_mousewheel_recursively(child, scrollable_frame)
+
+    def apply_scroll_fix(self):
+        """Find all scrollable frames and bind mouse wheel recursively"""
+        for tab_name in self.tabview._name_list:
+            tab = self.tabview.tab(tab_name)
+            for widget in tab.winfo_children():
+                if isinstance(widget, ctk.CTkScrollableFrame):
+                    self._bind_mousewheel_recursively(widget, widget)
+                # Check within sub-tabs (like AI API Settings)
+                if isinstance(widget, ctk.CTkTabview):
+                    for sub_tab_name in widget._name_list:
+                        sub_tab = widget.tab(sub_tab_name)
+                        for sub_widget in sub_tab.winfo_children():
+                            if isinstance(sub_widget, ctk.CTkScrollableFrame):
+                                self._bind_mousewheel_recursively(sub_widget, sub_widget)
     
     def create_ui(self):
         """Create the settings UI"""
@@ -162,9 +190,10 @@ class SettingsPage(ctk.CTkFrame):
                 if not chat_models:
                     chat_models = all_models  # Fallback to all models if filtering removes everything
                 
-                self.after(0, lambda: self._on_yt_models_loaded(chat_models))
+                self.after(0, lambda m=chat_models: self._on_yt_models_loaded(m))
             except Exception as e:
-                self.after(0, lambda: self._on_yt_models_load_error(str(e)))
+                err_msg = str(e)
+                self.after(0, lambda err=err_msg: self._on_yt_models_load_error(err))
         
         threading.Thread(target=do_load, daemon=True).start()
     
@@ -230,11 +259,12 @@ class SettingsPage(ctk.CTkFrame):
                     short_names = [name.split('/')[-1] for name in model_names]
                     
                     if model in short_names or any(name.endswith(model) for name in model_names):
-                        self.after(0, lambda: self._on_yt_validate_success(model, "Gemini AI", validate_btn))
+                        self.after(0, lambda m=model: self._on_yt_validate_success(m, "Gemini AI", validate_btn))
                     else:
-                        self.after(0, lambda: self._on_yt_validate_error(
-                            f"Model '{model}' not found in Gemini models.\n\n" +
-                            f"Available models: {', '.join(short_names[:5])}...", 
+                        available_str = ", ".join(short_names[:5])
+                        self.after(0, lambda m=model, av=available_str: self._on_yt_validate_error(
+                            f"Model '{m}' not found in Gemini models.\n\n" +
+                            f"Available models: {av}...", 
                             validate_btn))
                 else:
                     from openai import OpenAI
@@ -247,18 +277,19 @@ class SettingsPage(ctk.CTkFrame):
                         
                         # Check if model is available
                         if model not in available_models:
-                            self.after(0, lambda: self._on_yt_validate_error(
-                                f"Model '{model}' not found in available models.\n\n" +
-                                f"Available models: {', '.join(available_models[:5])}...", 
+                            available_str = ", ".join(available_models[:5])
+                            self.after(0, lambda m=model, av=available_str: self._on_yt_validate_error(
+                                f"Model '{m}' not found in available models.\n\n" +
+                                f"Available models: {av}...", 
                                 validate_btn))
                             return
                     except:
                         pass
                     
-                    self.after(0, lambda: self._on_yt_validate_success(model, url, validate_btn))
+                    self.after(0, lambda m=model, u=url: self._on_yt_validate_success(m, u, validate_btn))
             except Exception as e:
                 error_msg = str(e)
-                self.after(0, lambda: self._on_yt_validate_error(error_msg, validate_btn))
+                self.after(0, lambda err=error_msg: self._on_yt_validate_error(err, validate_btn))
         
         threading.Thread(target=do_validate, daemon=True).start()
     
@@ -320,9 +351,10 @@ class SettingsPage(ctk.CTkFrame):
                 if not chat_models:
                     chat_models = all_models  # Fallback to all models if filtering removes everything
                 
-                self.after(0, lambda: self._on_models_loaded(chat_models))
+                self.after(0, lambda m=chat_models: self._on_models_loaded(m))
             except Exception as e:
-                self.after(0, lambda: self._on_models_load_error(str(e)))
+                err_msg = str(e)
+                self.after(0, lambda err=err_msg: self._on_models_load_error(err))
         
         threading.Thread(target=do_load, daemon=True).start()
     
@@ -390,16 +422,17 @@ class SettingsPage(ctk.CTkFrame):
                         short_names = [name.split('/')[-1] for name in model_names]
                         
                         if model in short_names or any(name.endswith(model) for name in model_names):
-                            self.after(0, lambda: self._on_hf_validate_success(model, "Gemini AI", validate_btn))
+                            self.after(0, lambda m=model: self._on_hf_validate_success(m, "Gemini AI", validate_btn))
                         else:
-                            self.after(0, lambda: self._on_hf_validate_error(
-                                f"Model '{model}' not found in Gemini models.\n\n" +
-                                f"Available models: {', '.join(short_names[:5])}...", 
+                            available_str = ", ".join(short_names[:5])
+                            self.after(0, lambda m=model, av=available_str: self._on_hf_validate_error(
+                                f"Model '{m}' not found in Gemini models.\n\n" +
+                                f"Available models: {av}...", 
                                 validate_btn))
                     except Exception as genai_err:
                         # Fallback for some restrictions or regions
                         if api_key:
-                             self.after(0, lambda: self._on_hf_validate_success(model, "Gemini AI (Limited Verify)", validate_btn))
+                             self.after(0, lambda m=model: self._on_hf_validate_success(m, "Gemini AI (Limited Verify)", validate_btn))
                         else:
                              raise genai_err
                 else:
@@ -413,19 +446,20 @@ class SettingsPage(ctk.CTkFrame):
                         
                         # Check if model is available
                         if model not in available_models:
-                            self.after(0, lambda: self._on_hf_validate_error(
-                                f"Model '{model}' not found in available models.\n\n" +
-                                f"Available models: {', '.join(available_models[:5])}...", 
+                            available_str = ", ".join(available_models[:5])
+                            self.after(0, lambda m=model, av=available_str: self._on_hf_validate_error(
+                                f"Model '{m}' not found in available models.\n\n" +
+                                f"Available models: {av}...", 
                                 validate_btn))
                             return
                     except:
                         # If listing models fails, some providers don't support it but key might work
                         pass
                     
-                    self.after(0, lambda: self._on_hf_validate_success(model, url, validate_btn))
+                    self.after(0, lambda m=model, u=url: self._on_hf_validate_success(m, u, validate_btn))
             except Exception as e:
                 error_msg = str(e)
-                self.after(0, lambda: self._on_hf_validate_error(error_msg, validate_btn))
+                self.after(0, lambda err=error_msg: self._on_hf_validate_error(err, validate_btn))
         
         threading.Thread(target=do_validate, daemon=True).start()
     
@@ -544,42 +578,33 @@ class SettingsPage(ctk.CTkFrame):
         if messagebox.askyesno("Apply to All", 
             "Apply this Configuration to all AI providers?\n\n(Models will remain separate)"):
             
-            url = url or "https://api.openai.com/v1"
+            if provider_type == "gemini":
+                url = "Gemini SDK (Direct)"
+            else:
+                url = url or "https://api.openai.com/v1"
             
             # Apply to all entry fields
             self.hf_provider_var.set(provider_type)
-            self.hf_url_entry.configure(state="normal")
-            self.hf_url_entry.delete(0, "end")
-            self.hf_url_entry.insert(0, url)
+            self.on_hf_provider_change(provider_type) # This handles URL entry state
             self.hf_key_entry.delete(0, "end")
             self.hf_key_entry.insert(0, api_key)
-            self.on_hf_provider_change(provider_type)
             
             self.cm_provider_var.set(provider_type)
-            self.cm_url_entry.configure(state="normal")
-            self.cm_url_entry.delete(0, "end")
-            self.cm_url_entry.insert(0, url)
+            self.on_cm_provider_change(provider_type)
             self.cm_key_entry.delete(0, "end")
             self.cm_key_entry.insert(0, api_key)
-            self.on_cm_provider_change(provider_type)
             
             self.hm_provider_var.set(provider_type)
-            self.hm_url_entry.configure(state="normal")
-            self.hm_url_entry.delete(0, "end")
-            self.hm_url_entry.insert(0, url)
+            self.on_hm_provider_change(provider_type)
             self.hm_key_entry.delete(0, "end")
             self.hm_key_entry.insert(0, api_key)
-            self.on_hm_provider_change(provider_type)
             
             self.yt_provider_var.set(provider_type)
-            self.yt_url_entry.configure(state="normal")
-            self.yt_url_entry.delete(0, "end")
-            self.yt_url_entry.insert(0, url)
+            self.on_yt_provider_change(provider_type)
             self.yt_key_entry.delete(0, "end")
             self.yt_key_entry.insert(0, api_key)
-            self.on_yt_provider_change(provider_type)
             
-            messagebox.showinfo("Success", "✓ Configuration applied to all providers!")
+            messagebox.showinfo("Success", f"✓ Configuration applied to all providers as {provider_type.upper()}!")
             
     def on_hf_provider_change(self, provider_type):
         if provider_type.lower() == "gemini":
@@ -587,7 +612,7 @@ class SettingsPage(ctk.CTkFrame):
             self.hf_url_entry.delete(0, "end")
             self.hf_url_entry.insert(0, "Gemini SDK (Direct)")
             self.hf_url_entry.configure(state="disabled", fg_color="gray30")
-            self.hf_model_var.set("gemini-1.5-flash")
+            self.hf_model_var.set("gemini-2.5-pro")
         else:
             self.hf_url_entry.configure(state="normal", fg_color=("white", "gray20"))
             if self.hf_url_entry.get() == "Gemini SDK (Direct)":
@@ -603,7 +628,7 @@ class SettingsPage(ctk.CTkFrame):
             self.cm_url_entry.insert(0, "Gemini SDK (Direct)")
             self.cm_url_entry.configure(state="disabled", fg_color="gray30")
             self.cm_model_entry.delete(0, "end")
-            self.cm_model_entry.insert(0, "gemini-1.5-flash")
+            self.cm_model_entry.insert(0, "gemini-2.5-pro")
         else:
             self.cm_url_entry.configure(state="normal", fg_color=("white", "gray20"))
             if self.cm_url_entry.get() == "Gemini SDK (Direct)":
@@ -619,18 +644,25 @@ class SettingsPage(ctk.CTkFrame):
             self.hm_url_entry.delete(0, "end")
             self.hm_url_entry.insert(0, "Gemini SDK (Direct)")
             self.hm_url_entry.configure(state="disabled", fg_color="gray30")
-            # Gemini doesn't have TTS, but we show the flash model as a hint 
-            # or just leave it for the user if they want to try anyway (though core warns)
             self.hm_model_entry.delete(0, "end")
-            self.hm_model_entry.insert(0, "gemini-1.5-flash")
+            self.hm_model_entry.insert(0, "gemini-2.5-pro")
+            
+            # Show warning label
+            if hasattr(self, 'hm_warning_label'):
+                self.hm_warning_label.pack(fill="x", padx=10, pady=(0, 15), before=self.hm_url_entry.master)
         else:
             self.hm_url_entry.configure(state="normal", fg_color=("white", "gray20"))
             if self.hm_url_entry.get() == "Gemini SDK (Direct)":
                 self.hm_url_entry.delete(0, "end")
                 self.hm_url_entry.insert(0, "https://api.openai.com/v1")
+            
             if "gemini" in self.hm_model_entry.get().lower():
                 self.hm_model_entry.delete(0, "end")
                 self.hm_model_entry.insert(0, "tts-1")
+            
+            # Hide warning label
+            if hasattr(self, 'hm_warning_label'):
+                self.hm_warning_label.pack_forget()
             
     def on_yt_provider_change(self, provider_type):
         if provider_type.lower() == "gemini":
@@ -638,7 +670,7 @@ class SettingsPage(ctk.CTkFrame):
             self.yt_url_entry.delete(0, "end")
             self.yt_url_entry.insert(0, "Gemini SDK (Direct)")
             self.yt_url_entry.configure(state="disabled", fg_color="gray30")
-            self.yt_model_var.set("gemini-1.5-flash")
+            self.yt_model_var.set("gemini-2.5-pro")
         else:
             self.yt_url_entry.configure(state="normal", fg_color=("white", "gray20"))
             if self.yt_url_entry.get() == "Gemini SDK (Direct)":
@@ -889,6 +921,17 @@ class SettingsPage(ctk.CTkFrame):
             command=self.on_hm_provider_change)
         self.hm_provider_menu.pack(fill="x", pady=(5, 0))
         
+        # Warning Label for Gemini TTS
+        self.hm_warning_label = ctk.CTkLabel(scroll, 
+            text="⚠️ Gemini does not support TTS (Voice) yet.\nIf you use Gemini here, the 'Hook' feature will be disabled in the home page.",
+            font=ctk.CTkFont(size=11, weight="bold"), text_color="#e74c3c", 
+            fg_color=("#fdf2f2", "#2d1616"), corner_radius=5, pady=10)
+        # Initially hidden if not gemini
+        if self.hm_provider_var.get() != "gemini":
+            self.hm_warning_label.pack_forget()
+        else:
+            self.hm_warning_label.pack(fill="x", padx=10, pady=(10, 5))
+        
         # API Base URL
         url_frame = ctk.CTkFrame(scroll, fg_color="transparent")
         url_frame.pack(fill="x", padx=10, pady=(0, 15))
@@ -1115,9 +1158,10 @@ class SettingsPage(ctk.CTkFrame):
                 gpu_info = detector.detect_gpu()
                 recommendation = detector.get_recommended_encoder()
                 
-                self.after(0, lambda: self._on_gpu_detected(gpu_info, recommendation))
+                self.after(0, lambda gi=gpu_info, r=recommendation: self._on_gpu_detected(gi, r))
             except Exception as e:
-                self.after(0, lambda: self._on_gpu_detect_error(str(e)))
+                err_msg = str(e)
+                self.after(0, lambda err=err_msg: self._on_gpu_detect_error(err))
         
         threading.Thread(target=do_detect, daemon=True).start()
     
@@ -1207,31 +1251,51 @@ class SettingsPage(ctk.CTkFrame):
         """Create output folder settings tab"""
         main = self.tabview.tab("Output")
         
-        ctk.CTkLabel(main, text="Output Folder", anchor="w", font=ctk.CTkFont(size=14, weight="bold")).pack(fill="x", pady=(15, 5))
-        ctk.CTkLabel(main, text="Folder where video clips will be saved", anchor="w", 
-            font=ctk.CTkFont(size=11), text_color="gray").pack(fill="x", pady=(0, 10))
+        # Scrollable frame
+        scroll = ctk.CTkScrollableFrame(main)
+        scroll.pack(fill="both", expand=True, padx=5, pady=5)
         
-        output_frame = ctk.CTkFrame(main, fg_color="transparent")
-        output_frame.pack(fill="x", pady=(5, 15))
+        ctk.CTkLabel(scroll, text="Output Folder", anchor="w", font=ctk.CTkFont(size=14, weight="bold")).pack(fill="x", pady=(15, 5), padx=10)
+        ctk.CTkLabel(scroll, text="Folder where video clips will be saved", anchor="w", 
+            font=ctk.CTkFont(size=11), text_color="gray").pack(fill="x", pady=(0, 10), padx=10)
+        
+        output_frame = ctk.CTkFrame(scroll, fg_color="transparent")
+        output_frame.pack(fill="x", pady=(5, 15), padx=10)
         self.output_var = ctk.StringVar(value=str(self.output_dir))
         self.output_entry = ctk.CTkEntry(output_frame, textvariable=self.output_var)
         self.output_entry.pack(side="left", fill="x", expand=True, padx=(0, 10))
         ctk.CTkButton(output_frame, text="Browse", width=100, command=self.browse_output_folder).pack(side="right")
         
         # Open folder button
-        ctk.CTkButton(main, text="Open Output Folder", height=40, fg_color="gray",
-            command=lambda: self.open_folder(self.output_var.get())).pack(fill="x", pady=(0, 15))
+        ctk.CTkButton(scroll, text="Open Output Folder", height=40, fg_color="gray",
+            command=lambda: self.open_folder(self.output_var.get())).pack(fill="x", pady=(0, 15), padx=10)
+        
+        # Video Quality section
+        ctk.CTkLabel(scroll, text="Video Quality", anchor="w", font=ctk.CTkFont(size=14, weight="bold")).pack(fill="x", pady=(15, 5), padx=10)
+        ctk.CTkLabel(scroll, text="Select the maximum resolution for downloaded videos", anchor="w", 
+            font=ctk.CTkFont(size=11), text_color="gray").pack(fill="x", pady=(0, 10), padx=10)
+        
+        quality_frame = ctk.CTkFrame(scroll, fg_color=("gray85", "gray20"), corner_radius=10)
+        quality_frame.pack(fill="x", pady=(5, 10), padx=10)
+        
+        self.quality_var = ctk.StringVar(value="1080p")
+        quality_options = ["720p", "1080p", "1440p", "4K"]
+        
+        self.quality_menu = ctk.CTkOptionMenu(quality_frame, height=38,
+            values=quality_options, 
+            variable=self.quality_var)
+        self.quality_menu.pack(fill="x", padx=15, pady=15)
         
         # Face Tracking Mode section
-        ctk.CTkLabel(main, text="Face Tracking Mode", anchor="w", font=ctk.CTkFont(size=14, weight="bold")).pack(fill="x", pady=(15, 5))
-        ctk.CTkLabel(main, text="Choose how the video crops to speakers", anchor="w", 
-            font=ctk.CTkFont(size=11), text_color="gray").pack(fill="x", pady=(0, 10))
+        ctk.CTkLabel(scroll, text="Face Tracking Mode", anchor="w", font=ctk.CTkFont(size=14, weight="bold")).pack(fill="x", pady=(15, 5), padx=10)
+        ctk.CTkLabel(scroll, text="Choose how the video crops to speakers", anchor="w", 
+            font=ctk.CTkFont(size=11), text_color="gray").pack(fill="x", pady=(0, 10), padx=10)
         
         # Radio buttons for face tracking mode
         self.face_tracking_var = ctk.StringVar(value="opencv")
         
-        opencv_frame = ctk.CTkFrame(main, fg_color=("gray85", "gray20"))
-        opencv_frame.pack(fill="x", pady=(5, 10))
+        opencv_frame = ctk.CTkFrame(scroll, fg_color=("gray85", "gray20"), corner_radius=10)
+        opencv_frame.pack(fill="x", pady=(5, 10), padx=10)
         opencv_radio = ctk.CTkRadioButton(opencv_frame, text="OpenCV (Fast)", variable=self.face_tracking_var, 
             value="opencv", font=ctk.CTkFont(size=13, weight="bold"))
         opencv_radio.pack(anchor="w", padx=15, pady=(10, 5))
@@ -1242,8 +1306,8 @@ class SettingsPage(ctk.CTkFrame):
         ctk.CTkLabel(opencv_frame, text="• Recommended for most users", anchor="w", 
             font=ctk.CTkFont(size=11), text_color="gray").pack(anchor="w", padx=35, pady=(0, 10))
         
-        mediapipe_frame = ctk.CTkFrame(main, fg_color=("gray85", "gray20"))
-        mediapipe_frame.pack(fill="x", pady=(0, 10))
+        mediapipe_frame = ctk.CTkFrame(scroll, fg_color=("gray85", "gray20"), corner_radius=10)
+        mediapipe_frame.pack(fill="x", pady=(0, 10), padx=10)
         mediapipe_radio = ctk.CTkRadioButton(mediapipe_frame, text="MediaPipe (Smart)", variable=self.face_tracking_var, 
             value="mediapipe", font=ctk.CTkFont(size=13, weight="bold"))
         mediapipe_radio.pack(anchor="w", padx=15, pady=(10, 5))
@@ -1254,7 +1318,10 @@ class SettingsPage(ctk.CTkFrame):
         ctk.CTkLabel(mediapipe_frame, text="⚠ Slower processing (2-3x)", anchor="w", 
             font=ctk.CTkFont(size=11), text_color="orange").pack(anchor="w", padx=35, pady=(0, 10))
         
-        ctk.CTkButton(main, text="Save Settings", height=40, command=self.save_settings).pack(fill="x", pady=(10, 0))
+        ctk.CTkButton(scroll, text="Save Settings", height=45, 
+            font=ctk.CTkFont(size=14, weight="bold"),
+            fg_color=("#27ae60", "#27ae60"), hover_color=("#229954", "#229954"),
+            command=self.save_settings).pack(fill="x", pady=(20, 15), padx=10)
     
     def create_watermark_tab(self):
         """Create watermark settings tab"""
@@ -1809,16 +1876,17 @@ Stay tuned for updates! 🎵"""
             try:
                 self.youtube_uploader.authenticate(callback=self.on_youtube_connected)
             except Exception as e:
-                self.after(0, lambda: self.on_youtube_error(str(e)))
+                err_msg = str(e)
+                self.after(0, lambda err=err_msg: self.on_youtube_error(err))
         
         threading.Thread(target=do_connect, daemon=True).start()
     
     def on_youtube_connected(self, success, data):
         """Callback when YouTube connection completes"""
         if success:
-            self.after(0, lambda: self._update_youtube_connected(data))
+            self.after(0, lambda d=data: self._update_youtube_connected(d))
         else:
-            self.after(0, lambda: self.on_youtube_error(str(data)))
+            self.after(0, lambda d=data: self.on_youtube_error(str(d)))
     
     def _update_youtube_connected(self, channel):
         """Update UI after YouTube connection"""
@@ -1908,7 +1976,7 @@ Stay tuned for updates! 🎵"""
                 
                 if response.status_code == 200:
                     data = response.json()
-                    self.after(0, lambda: self._display_accounts_only(data))
+                    self.after(0, lambda d=data: self._display_accounts_only(d))
                     
             except Exception:
                 # Silently fail - don't show error on auto-load
@@ -1973,7 +2041,7 @@ Stay tuned for updates! 🎵"""
                 
                 if response.status_code == 200:
                     data = response.json()
-                    self.after(0, lambda: self._on_repliz_validate_success(data))
+                    self.after(0, lambda d=data: self._on_repliz_validate_success(d))
                 else:
                     error_msg = f"HTTP {response.status_code}"
                     try:
@@ -1983,14 +2051,15 @@ Stay tuned for updates! 🎵"""
                         if response.status_code == 401:
                             error_msg = "invalid authorization header"
                         pass
-                    self.after(0, lambda: self._on_repliz_validate_error(error_msg))
+                    self.after(0, lambda msg=error_msg: self._on_repliz_validate_error(msg))
                     
             except requests.exceptions.Timeout:
                 self.after(0, lambda: self._on_repliz_validate_error("Request timeout"))
             except requests.exceptions.ConnectionError:
                 self.after(0, lambda: self._on_repliz_validate_error("Connection error"))
             except Exception as e:
-                self.after(0, lambda: self._on_repliz_validate_error(str(e)))
+                err_msg = str(e)
+                self.after(0, lambda err=err_msg: self._on_repliz_validate_error(err))
         
         threading.Thread(target=do_validate, daemon=True).start()
     
@@ -2145,14 +2214,13 @@ Stay tuned for updates! 🎵"""
                     ctk_img = CTkImage(light_image=output, dark_image=output, size=(80, 80))
                     
                     # Update UI in main thread
-                    self.after(0, lambda: self._display_profile_picture(parent, ctk_img))
+                    self.after(0, lambda p=parent, img=ctk_img: self._display_profile_picture(p, img))
                 else:
                     # Fallback to icon
-                    self.after(0, lambda: self._display_fallback_icon(parent, fallback_icon))
-                    
-            except Exception as e:
-                # Fallback to icon on error
-                self.after(0, lambda: self._display_fallback_icon(parent, fallback_icon))
+                    self.after(0, lambda p=parent, icon=fallback_icon: self._display_fallback_icon(p, icon))
+            except:
+                # Fallback to icon on error for any exception during image loading/processing
+                self.after(0, lambda p=parent, icon=fallback_icon: self._display_fallback_icon(p, icon))
         
         # Show loading placeholder
         loading_label = ctk.CTkLabel(parent, text="⏳", 
@@ -2349,6 +2417,10 @@ and YouTube Shorts."""
         face_tracking_mode = self.config.get("face_tracking_mode", "opencv")
         self.face_tracking_var.set(face_tracking_mode)
         
+        # Load video quality
+        video_quality = self.config.get("video_quality", "1080p")
+        self.quality_var.set(video_quality)
+        
         # Load watermark settings
         watermark = self.config.get("watermark", {})
         self.watermark_enabled.set(watermark.get("enabled", False))
@@ -2389,7 +2461,7 @@ and YouTube Shorts."""
                 client = OpenAI(api_key=api_key, base_url=base_url)
                 models = sorted([m.id for m in client.models.list().data])
                 self.models_list = models
-                self.after(0, lambda: self._on_success(models))
+                self.after(0, lambda m=models: self._on_success(m))
             except:
                 self.after(0, self._on_error)
         threading.Thread(target=do_validate, daemon=True).start()
@@ -2499,6 +2571,7 @@ and YouTube Shorts."""
         self.config.set("temperature", self.temp_var.get())
         self.config.set("system_prompt", system_prompt)
         self.config.set("face_tracking_mode", self.face_tracking_var.get())
+        self.config.set("video_quality", self.quality_var.get())
         
         # Save watermark settings
         watermark_settings = {

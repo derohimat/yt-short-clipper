@@ -16,6 +16,7 @@ from pathlib import Path
 from datetime import datetime
 from openai import OpenAI
 import google.generativeai as genai
+import shutil
 
 # Hide console window on Windows
 SUBPROCESS_FLAGS = 0
@@ -41,6 +42,7 @@ class AutoClipperCore:
         mediapipe_settings: dict = None,
         ai_providers: dict = None,  # NEW: Multi-provider config
         subtitle_language: str = "id",  # NEW: Configurable subtitle language
+        video_quality: str = "1080p",   # NEW: Configurable video quality
         log_callback=None,
         progress_callback=None,
         token_callback=None,
@@ -50,6 +52,9 @@ class AutoClipperCore:
         self.set_progress = progress_callback or (lambda s, p: None)
         self.report_tokens = token_callback or (lambda gi, go, w, t: None)
         self.is_cancelled = cancel_check or (lambda: False)
+        
+        # New settings
+        self.video_quality = video_quality
         # Multi-provider support
         self.ai_providers = ai_providers or {}
         
@@ -70,8 +75,8 @@ class AutoClipperCore:
             
             if self.hf_provider_type == "gemini":
                 genai.configure(api_key=hf_key)
-                self.highlight_client = genai.GenerativeModel(hf_config.get("model", "gemini-1.5-flash"))
-                self.model = hf_config.get("model", "gemini-1.5-flash")
+                self.highlight_client = genai.GenerativeModel(hf_config.get("model", "gemini-2.5-pro"))
+                self.model = hf_config.get("model", "gemini-2.5-pro")
             else:
                 self.highlight_client = OpenAI(
                     api_key=hf_key,
@@ -87,8 +92,8 @@ class AutoClipperCore:
             if self.cm_provider_type == "gemini":
                 genai.configure(api_key=cm_key)
                 # Gemini uses the same client for everything, but we store the model name
-                self.caption_client = genai.GenerativeModel(cm_config.get("model", "gemini-1.5-flash"))
-                self.whisper_model = cm_config.get("model", "gemini-1.5-flash")
+                self.caption_client = genai.GenerativeModel(cm_config.get("model", "gemini-2.5-pro"))
+                self.whisper_model = cm_config.get("model", "gemini-2.5-pro")
             else:
                 self.caption_client = OpenAI(
                     api_key=cm_key,
@@ -181,6 +186,39 @@ class AutoClipperCore:
             return local_assets
             
         return None
+
+    def _get_font_path(self):
+        """Helper to find Arial Bold font or a suitable alternative across platforms"""
+        if sys.platform == "win32":
+            paths = [
+                "C:/Windows/Fonts/arialbd.ttf",
+                "C:/Windows/Fonts/arial.ttf"
+            ]
+        elif sys.platform == "darwin": # macOS
+            paths = [
+                "/Library/Fonts/Arial Bold.ttf",
+                "/Library/Fonts/Arial.ttf",
+                "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+                "/System/Library/Fonts/Helvetica.ttc"
+            ]
+        else: # Linux
+            paths = [
+                "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+                "/usr/share/fonts/TTF/arialbd.ttf",
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+            ]
+            
+        for p in paths:
+            if os.path.exists(p):
+                return p
+        
+        # Fallback to current directory assets if bundled
+        bundle_dir = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
+        local_p = os.path.join(bundle_dir, "assets", "arialbd.ttf")
+        if os.path.exists(local_p):
+            return local_p
+            
+        return "arial" # FFmpeg might find it in its own path
     
     def _gen_content_with_retry(self, client, prompt, temperature, max_retries=5, current_log="Finding highlights"):
         """Helper to call Gemini with retries on quota error"""
@@ -331,7 +369,10 @@ Transcript:
 {transcript}"""
     
     def process(self, url: str, num_clips: int = 5, add_captions: bool = True, add_hook: bool = True):
-        """Main processing pipeline"""
+        """Main processing pipeline with deterministic output and resume capability"""
+        
+        from utils.helpers import extract_video_id
+        video_id = extract_video_id(url)
         
         # Step 1: Download video
         self.set_progress("Downloading video...", 0.1)
@@ -342,11 +383,43 @@ Transcript:
         
         if not srt_path:
             raise Exception(f"No subtitle found for language: {self.subtitle_language}")
-        
-        # Step 2: Find highlights
+            
+        # Define deterministic output directory based on video info or ID
+        safe_title = "".join([c if c.isalnum() else "_" for c in video_info.get("title", "Video")])[:50]
+        folder_name = f"{safe_title}_{video_id}" if video_id else safe_title
+        final_output_dir = self.output_dir / folder_name
+        final_output_dir.mkdir(parents=True, exist_ok=True)
+        self.log(f"  Final output directory: {final_output_dir}")
+
+        # Step 2: Find highlights (with caching)
         self.set_progress("Finding highlights...", 0.3)
-        transcript = self.parse_srt(srt_path)
-        highlights = self.find_highlights(transcript, video_info, num_clips)
+        
+        highlights = None
+        if hasattr(self, 'video_cache_dir'):
+            highlight_cache_file = self.video_cache_dir / "highlights.json"
+            if highlight_cache_file.exists():
+                try:
+                    with open(highlight_cache_file, "r", encoding="utf-8") as f:
+                        cached_data = json.load(f)
+                        # Check if number of clips requested matches or if we can use cached subset
+                        if len(cached_data) >= num_clips:
+                            highlights = cached_data[:num_clips]
+                            self.log("  ✨ Using cached highlights!")
+                except Exception as e:
+                    self.log(f"  ⚠ Failed to load cached highlights: {e}")
+
+        if not highlights:
+            transcript = self.parse_srt(srt_path)
+            highlights = self.find_highlights(transcript, video_info, num_clips)
+            
+            # Cache the highlights
+            if hasattr(self, 'video_cache_dir') and highlights:
+                try:
+                    highlight_cache_file = self.video_cache_dir / "highlights.json"
+                    with open(highlight_cache_file, "w", encoding="utf-8") as f:
+                        json.dump(highlights, f, ensure_ascii=False, indent=2)
+                except Exception as e:
+                    self.log(f"  ⚠ Failed to cache highlights: {e}")
         
         if self.is_cancelled():
             return
@@ -354,23 +427,69 @@ Transcript:
         if not highlights:
             raise Exception("No valid highlights found!")
         
-        # Step 3: Process each clip
+        # Step 3: Process each clip with resume check
         total_clips = len(highlights)
         for i, highlight in enumerate(highlights, 1):
             if self.is_cancelled():
                 return
-            self.process_clip(video_path, highlight, i, total_clips, add_captions=add_captions, add_hook=add_hook)
+                
+            # Deterministic clip filename
+            safe_clip_title = "".join([c if c.isalnum() else "_" for c in highlight.get("title", f"Clip_{i}")])[:30]
+            final_clip_path = final_output_dir / f"{i:02d}_{safe_clip_title}.mp4"
+            
+            if final_clip_path.exists() and final_clip_path.stat().st_size > 1000000:
+                self.log(f"\n[Clip {i}] Skipping - already exists: {final_clip_path.name}")
+                # Update progress even when skipping
+                clip_base = 0.3 + (0.6 * (i) / total_clips)
+                self.set_progress(f"Clip {i}/{total_clips}: Skipped (Exists)", clip_base)
+                continue
+
+            # Process the clip (now using the deterministic clip_dir inside process_clip)
+            self.process_clip(video_path, highlight, i, total_clips, add_captions=add_captions, add_hook=add_hook, output_parent_dir=final_output_dir)
         
         # Cleanup
         self.set_progress("Cleaning up...", 0.95)
         self.cleanup()
         
         self.set_progress("Complete!", 1.0)
-        self.log(f"\n✅ Created {total_clips} clips in: {self.output_dir}")
+        self.log(f"\n✅ Created/Verified {total_clips} clips in: {final_output_dir}")
     
     def download_video(self, url: str) -> tuple:
-        """Download video and subtitle with progress"""
+        """Download video and subtitle with progress. Skips if already downloaded."""
         self.log("[1/4] Downloading video & subtitle...")
+        
+        from utils.helpers import extract_video_id
+        video_id = extract_video_id(url)
+        
+        # Set up persistent cache directory
+        if video_id:
+            cache_root = self.output_dir / "cache"
+            cache_root.mkdir(parents=True, exist_ok=True)
+            self.video_cache_dir = cache_root / video_id
+            self.video_cache_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Paths for potential cached files
+            possible_source = self.video_cache_dir / "source.mp4"
+            # We also need subtitles. Subtitles can have different suffixes like .id.srt
+            subtitle_file = None
+            for f in self.video_cache_dir.glob("source.*.srt"):
+                subtitle_file = f
+                break
+                
+            if possible_source.exists() and possible_source.stat().st_size > 1000000: # Min 1MB
+                self.log(f"  ✨ Video already exists in cache! ({video_id})")
+                
+                # Copy from cache to temp for processing (or just use from cache)
+                import shutil
+                shutil.copy(possible_source, self.temp_dir / "source.mp4")
+                if subtitle_file and subtitle_file.exists():
+                    shutil.copy(subtitle_file, self.temp_dir / f"source.{self.subtitle_language}.srt")
+                    self.log(f"  ✨ Found cached subtitles: {subtitle_file.name}")
+                    return str(self.temp_dir / "source.mp4"), str(self.temp_dir / f"source.{self.subtitle_language}.srt"), {}
+                else:
+                    self.log("  ⚠ Source video found in cache, but subtitles missing. Re-downloading to get subtitles.")
+        else:
+            self.video_cache_dir = self.temp_dir # Fallback to temp if no video ID
         
         # Get video metadata
         self.log("  Fetching video info...")
@@ -397,7 +516,13 @@ Transcript:
                 self.log("  Warning: Could not parse metadata")
         
         # Download video + subtitle with progress
-        self.log(f"  Downloading video with {self.subtitle_language} subtitle (Preferring H.264)...")
+        # Select format based on quality setting
+        height = 1080
+        if self.video_quality == "720p": height = 720
+        elif self.video_quality == "1440p": height = 1440
+        elif self.video_quality == "4K": height = 2160
+        
+        self.log(f"  Downloading video with {self.subtitle_language} subtitle (Quality: {self.video_quality})...")
         
         # Clear yt-dlp cache to avoid old session tokens/403s
         try:
@@ -407,7 +532,7 @@ Transcript:
             
         cmd = [
             self.ytdlp_path,
-            "-f", "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]/best[height<=1080]/best",
+            "-f", f"bestvideo[height<={height}][ext=mp4]+bestaudio[ext=m4a]/best[height<={height}][ext=mp4]/best[height<={height}]/best",
             "--write-sub", "--write-auto-sub",
             "--sub-lang", self.subtitle_language,
             "--convert-subs", "srt",
@@ -418,7 +543,7 @@ Transcript:
             "--add-header", "User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "--extractor-args", "youtube:player_client=web,mweb,public,ios",
             "--newline",
-            "-o", str(self.temp_dir / "source.%(ext)s"),
+            "-o", str(self.video_cache_dir / "source.%(ext)s"),
             url
         ]
         
@@ -471,14 +596,27 @@ Transcript:
             error_details = "\n".join(full_output[-5:]) # Get last 5 lines
             raise Exception(f"Download failed!\n\nOutput:\n{error_details}")
         
-        video_path = self.temp_dir / "source.mp4"
-        srt_path = self.temp_dir / f"source.{self.subtitle_language}.srt"
+        # Move files to temp if they were downloaded to cache
+        if self.video_cache_dir != self.temp_dir:
+            import shutil
+            # Find the actual downloaded file (might be mp4 or something else)
+            for f in self.video_cache_dir.glob("source.*"):
+                if f.suffix in ['.mp4', '.mkv', '.webm']:
+                    shutil.copy(f, self.temp_dir / "source.mp4")
+                    break
+            
+            # Find subtitles
+            for f in self.video_cache_dir.glob("source.*.srt"):
+                shutil.copy(f, self.temp_dir / f"source.{self.subtitle_language}.srt")
+                break
         
-        if not srt_path.exists():
-            srt_path = None
-            self.log(f"  Warning: No {self.subtitle_language} subtitle found")
+        video_path = str(self.temp_dir / "source.mp4")
+        subtitle_path = str(self.temp_dir / f"source.{self.subtitle_language}.srt")
         
-        return str(video_path), str(srt_path) if srt_path else None, video_info
+        if not os.path.exists(video_path):
+            raise Exception("Download failed! Video file not found.")
+            
+        return video_path, subtitle_path, video_info
     
     @staticmethod
     def get_available_subtitles(url: str, ytdlp_path: str = "yt-dlp") -> dict:
@@ -692,19 +830,25 @@ Transcript:
         
         return valid[:num_clips]
     
-    def process_clip(self, video_path: str, highlight: dict, index: int, total_clips: int = 1, add_captions: bool = True, add_hook: bool = True):
+    def process_clip(self, video_path: str, highlight: dict, index: int, total_clips: int = 1, add_captions: bool = True, add_hook: bool = True, output_parent_dir=None):
         """Process a single clip: cut, portrait, hook (optional), captions (optional)"""
         
         # Check cancel before starting
         if self.is_cancelled():
             return
         
-        # Create output folder with unique timestamp per clip
-        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S") + f"-{index:02d}"
-        clip_dir = self.output_dir / timestamp
+        # Create output folder
+        if output_parent_dir:
+            # Deterministic naming for resume support
+            safe_clip_title = "".join([c if c.isalnum() else "_" for c in highlight.get("title", f"Clip_{index}")])[:30]
+            clip_dir = output_parent_dir / f"{index:02d}_{safe_clip_title}_work"
+        else:
+            # Fallback to timestamp if no parent dir
+            timestamp = datetime.now().strftime("%Y%m%d-%H%M%S") + f"-{index:02d}"
+            clip_dir = self.output_dir / timestamp
+            
         clip_dir.mkdir(parents=True, exist_ok=True)
-        
-        self.log(f"  Output folder: {clip_dir}")
+        self.log(f"  Working folder: {clip_dir}")
         
         start = highlight["start_time"].replace(",", ".")
         end = highlight["end_time"].replace(",", ".")
@@ -804,7 +948,12 @@ Transcript:
             self.log("  ⊘ Skipped hook (disabled)")
         
         # Step 4: Add captions (optional)
-        final_file = clip_dir / "master.mp4"
+        if output_parent_dir:
+            safe_clip_title = "".join([c if c.isalnum() else "_" for c in highlight.get("title", f"Clip_{index}")])[:30]
+            final_file = output_parent_dir / f"{index:02d}_{safe_clip_title}.mp4"
+        else:
+            final_file = clip_dir / "master.mp4"
+            
         if add_captions:
             if self.is_cancelled():
                 return
@@ -1416,6 +1565,12 @@ Transcript:
         total_text_height = len(lines) * line_height
         start_y = (height // 3) - (total_text_height // 2)  # Position at upper third
         
+        # Get correct font path and escape for FFmpeg drawtext
+        font_path = self._get_font_path()
+        # FFmpeg drawtext fontfile path needs special escaping for colons and backslashes
+        # On Windows, C:\Path becomes C\\:/Path. On Unix, it stays mostly same but spaces might need help.
+        escaped_font_path = font_path.replace("\\", "/").replace(":", "\\:")
+
         for i, line in enumerate(lines):
             # Escape special characters for FFmpeg drawtext
             escaped_line = line.replace("'", "'\\''").replace(":", "\\:").replace("\\", "\\\\")
@@ -1424,7 +1579,7 @@ Transcript:
             # Yellow/gold text with white box background
             drawtext_filters.append(
                 f"drawtext=text='{escaped_line}':"
-                f"fontfile='C\\:/Windows/Fonts/arialbd.ttf':"
+                f"fontfile='{escaped_font_path}':"
                 f"fontsize={font_size}:"
                 f"fontcolor=#FFD700:"  # Golden yellow
                 f"box=1:"
@@ -2435,11 +2590,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         if not os.path.exists(bg_video) or os.path.getsize(bg_video) < 1000:
             raise Exception("Background video was not created properly")
         
-        # Copy font to temp dir to avoid Windows path colon issues in FFmpeg filter
-        import shutil
-        temp_font = str(self.temp_dir / "arial_bold.ttf")
-        if not os.path.exists(temp_font):
-            shutil.copy2("C:/Windows/Fonts/arialbd.ttf", temp_font)
+        # Line height and positioning
         
         # Now add text overlays one by one
         current_video = bg_video
