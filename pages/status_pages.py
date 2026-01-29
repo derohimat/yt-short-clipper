@@ -164,50 +164,91 @@ class APIStatusPage(ctk.CTkFrame):
                 ("youtube_title_maker", "📺 YouTube Title Maker", self.yt_maker_status_label, self.yt_maker_info_label, "chat")
             ]
             
-            for provider_key, provider_name, status_label, info_label, provider_type in providers_to_check:
+            for provider_key, provider_name, status_label, il, p_type in providers_to_check:
                 provider_config = ai_providers.get(provider_key, {})
+                prov_type_val = provider_config.get("provider_type", "openai")
                 api_key = provider_config.get("api_key", "")
                 base_url = provider_config.get("base_url", "https://api.openai.com/v1")
                 model = provider_config.get("model", "N/A")
                 
                 if not api_key:
-                    self.after(0, lambda sl=status_label, il=info_label: (
+                    self.after(0, lambda sl=status_label, info_l=il: (
                         sl.configure(text="✗ Not configured", text_color="orange"),
-                        il.configure(text="Please configure API key in Settings")
+                        info_l.configure(text="Please configure API key in Settings")
                     ))
                     continue
                 
                 try:
-                    client = OpenAI(api_key=api_key, base_url=base_url)
-                    
-                    # Try to list models to verify API key and model availability
-                    try:
-                        models_response = client.models.list()
-                        available_models = [m.id for m in models_response.data]
+                    if prov_type_val == "gemini":
+                        import google.generativeai as genai
+                        genai.configure(api_key=api_key)
                         
-                        # Check if configured model is available
-                        if model in available_models:
-                            self.after(0, lambda sl=status_label, il=info_label, m=model: (
-                                sl.configure(text="✓ Connected", text_color="green"),
-                                il.configure(text=f"Model: {m}")
-                            ))
-                        else:
-                            self.after(0, lambda sl=status_label, il=info_label, m=model: (
-                                sl.configure(text="⚠ Model not found", text_color="orange"),
-                                il.configure(text=f"Model '{m}' not in available models")
-                            ))
-                    except Exception as list_error:
-                        # Check if it's a connection/authentication error
-                        error_str = str(list_error).lower()
-                        if any(x in error_str for x in ['connection', 'timeout', 'unreachable', 'invalid', 'unauthorized', 'authentication', 'api key', 'not found', '404', '401', '403', '500', '502', '503', 'error code']):
-                            # Real error - connection or auth failed
-                            raise list_error
-                        else:
-                            # Provider might not support models.list(), show configured status
-                            self.after(0, lambda sl=status_label, il=info_label, m=model: (
+                        try:
+                            # Try to list models to verify API connection
+                            models_response = genai.list_models()
+                            # Convert models_response to a list of names for matching
+                            available_models = [m.name for m in models_response]
+                            short_names = [name.split('/')[-1] for name in available_models]
+                            
+                            # Check for matches (exact, short name, or partial)
+                            if any(model.lower() == name.lower() for name in short_names) or \
+                               any(model.lower() == name.lower() for name in available_models) or \
+                               any(model.lower() in name.lower() for name in short_names):
+                                
+                                # Find the actual name for display
+                                display_name = model
+                                for name in short_names:
+                                    if model.lower() in name.lower():
+                                        display_name = name
+                                        break
+
+                                self.after(0, lambda sl=status_label, info_l=il, m=display_name: (
+                                    sl.configure(text="✓ Connected", text_color="green"),
+                                    info_l.configure(text=f"Model: {m}")
+                                ))
+                            else:
+                                self.after(0, lambda sl=status_label, info_l=il, m=model: (
+                                    sl.configure(text="⚠ Model not found", text_color="orange"),
+                                    info_l.configure(text=f"Model '{m}' not in available Gemini models")
+                                ))
+                        except Exception as list_err:
+                            # If listing fails but we have a key, consider it configured at least
+                            self.after(0, lambda sl=status_label, info_l=il, m=model: (
                                 sl.configure(text="✓ Configured", text_color="green"),
-                                il.configure(text=f"Model: {m} (provider doesn't support model listing)")
+                                info_l.configure(text=f"Model: {m} (Could not verify availability)")
                             ))
+                    else:
+                        from openai import OpenAI
+                        client = OpenAI(api_key=api_key, base_url=base_url)
+                        
+                        # Try to list models to verify API key and model availability
+                        try:
+                            models_response = client.models.list()
+                            available_models = [m.id for m in models_response.data]
+                            
+                            # Check if configured model is available
+                            if model in available_models:
+                                self.after(0, lambda sl=status_label, info_l=il, m=model: (
+                                    sl.configure(text="✓ Connected", text_color="green"),
+                                    info_l.configure(text=f"Model: {m}")
+                                ))
+                            else:
+                                self.after(0, lambda sl=status_label, info_l=il, m=model: (
+                                    sl.configure(text="⚠ Model not found", text_color="orange"),
+                                    info_l.configure(text=f"Model '{m}' not in available models")
+                                ))
+                        except Exception as list_error:
+                            # Check if it's a connection/authentication error
+                            error_str = str(list_error).lower()
+                            if any(x in error_str for x in ['connection', 'timeout', 'unreachable', 'invalid', 'unauthorized', 'authentication', 'api key', 'not found', '404', '401', '403', '500', '502', '503', 'error code']):
+                                # Real error - connection or auth failed
+                                raise list_error
+                            else:
+                                # Provider might not support models.list(), show configured status
+                                self.after(0, lambda sl=status_label, info_l=il, m=model: (
+                                    sl.configure(text="✓ Configured", text_color="green"),
+                                    info_l.configure(text=f"Model: {m} (provider doesn't support model listing)")
+                                ))
                     
                 except Exception as e:
                     error_msg = str(e)[:60]

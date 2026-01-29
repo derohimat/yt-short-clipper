@@ -70,8 +70,11 @@ class YTShortClipperApp(ctk.CTk):
         self.ytdlp_path = get_ytdlp_path()  # NEW: Store yt-dlp path for subtitle fetching
         
         self.title("YT Short Clipper")
-        self.geometry("680x780")
-        self.resizable(False, False)
+        self.geometry("1100x800")
+        self.resizable(True, True)
+        
+        # Maximize window on startup
+        self.after(0, lambda: self.state("zoomed"))
         
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("blue")
@@ -211,7 +214,7 @@ class YTShortClipperApp(ctk.CTk):
         url_input_container.pack(fill="x", padx=8, pady=8)
         
         self.url_var = ctk.StringVar()
-        self.url_var.trace("w", self.on_url_change)
+        self.url_var.trace_add("write", self.on_url_change)
         url_entry = ctk.CTkEntry(url_input_container, textvariable=self.url_var, 
             placeholder_text="Paste YouTube link here...", height=40, border_width=0,
             fg_color="transparent")

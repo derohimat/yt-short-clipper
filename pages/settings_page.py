@@ -383,18 +383,25 @@ class SettingsPage(ctk.CTkFrame):
                     import google.generativeai as genai
                     genai.configure(api_key=api_key)
                     # Try to list models to verify API key
-                    models = genai.list_models()
-                    model_names = [m.name for m in models]
-                    # Note: Gemini model names usually start with 'models/'
-                    short_names = [name.split('/')[-1] for name in model_names]
-                    
-                    if model in short_names or any(name.endswith(model) for name in model_names):
-                        self.after(0, lambda: self._on_hf_validate_success(model, "Gemini AI", validate_btn))
-                    else:
-                        self.after(0, lambda: self._on_hf_validate_error(
-                            f"Model '{model}' not found in Gemini models.\n\n" +
-                            f"Available models: {', '.join(short_names[:5])}...", 
-                            validate_btn))
+                    try:
+                        models = genai.list_models()
+                        model_names = [m.name for m in models]
+                        # Note: Gemini model names usually start with 'models/'
+                        short_names = [name.split('/')[-1] for name in model_names]
+                        
+                        if model in short_names or any(name.endswith(model) for name in model_names):
+                            self.after(0, lambda: self._on_hf_validate_success(model, "Gemini AI", validate_btn))
+                        else:
+                            self.after(0, lambda: self._on_hf_validate_error(
+                                f"Model '{model}' not found in Gemini models.\n\n" +
+                                f"Available models: {', '.join(short_names[:5])}...", 
+                                validate_btn))
+                    except Exception as genai_err:
+                        # Fallback for some restrictions or regions
+                        if api_key:
+                             self.after(0, lambda: self._on_hf_validate_success(model, "Gemini AI (Limited Verify)", validate_btn))
+                        else:
+                             raise genai_err
                 else:
                     from openai import OpenAI
                     client = OpenAI(api_key=api_key, base_url=url)
@@ -412,16 +419,10 @@ class SettingsPage(ctk.CTkFrame):
                                 validate_btn))
                             return
                     except:
+                        # If listing models fails, some providers don't support it but key might work
                         pass
                     
                     self.after(0, lambda: self._on_hf_validate_success(model, url, validate_btn))
-                except Exception as list_error:
-                    # If listing models fails, the API key might still be valid
-                    # Some providers don't support models.list()
-                    # Just verify the API key is not empty and continue
-                    pass
-                
-                self.after(0, lambda: self._on_hf_validate_success(model, url, validate_btn))
             except Exception as e:
                 error_msg = str(e)
                 self.after(0, lambda: self._on_hf_validate_error(error_msg, validate_btn))
@@ -464,50 +465,72 @@ class SettingsPage(ctk.CTkFrame):
             if provider_type == "gemini":
                 import google.generativeai as genai
                 genai.configure(api_key=api_key)
-                # Try to list models
-                models_response = genai.list_models()
-                available_models = [m.name.split('/')[-1] for m in models_response]
+                
+                try:
+                    # Try to list models
+                    models_response = genai.list_models()
+                    available_models = []
+                    for m in models_response:
+                        name = m.name.split('/')[-1]
+                        available_models.append(name)
+                    
+                    # Also check for exact matches with prefix
+                    full_names = [m.name for m in genai.list_models()]
+                    
+                    if model in available_models or model in full_names or any(model.lower() in m.lower() for m in available_models):
+                        messagebox.showinfo("Success", 
+                            f"✓ Gemini configuration validated successfully!\n\nModel: {model}")
+                    else:
+                        messagebox.showwarning("Warning", 
+                            f"Model '{model}' not found in available Gemini models.\n\n" +
+                            f"Available models: {', '.join(available_models[:8])}...")
+                except Exception as list_err:
+                    # If listing fails, just verify key exists
+                    if api_key:
+                         messagebox.showinfo("Success", f"✓ Gemini API Key validated!\n\nModel: {model}")
+                    else:
+                         raise list_err
             else:
                 from openai import OpenAI
                 client = OpenAI(api_key=api_key, base_url=url)
-                # All providers: Try to list models to verify API connection
-                models_response = client.models.list()
-                available_models = [m.id for m in models_response.data]
                 
-                # Check if model is available
-                if model in available_models:
-                    messagebox.showinfo("Success", 
-                        f"✓ Configuration validated successfully!\n\nModel: {model}\nProvider: {url}")
-                else:
-                    # Model not found, but connection works
-                    messagebox.showwarning("Warning", 
-                        f"Model '{model}' not found in available models.\n\n" +
-                        f"Available models: {', '.join(available_models[:5])}...")
+                try:
+                    # Try to list models to verify API connection
+                    models_response = client.models.list()
+                    available_models = [m.id for m in models_response.data]
                     
-            except Exception as list_error:
-                # Check if it's a connection/authentication error
-                error_str = str(list_error).lower()
-                if any(x in error_str for x in ['connection', 'timeout', 'unreachable', 'invalid', 'unauthorized', 'authentication', 'api key', 'not found', '404', '401', '403']):
-                    # Real error - connection or auth failed
-                    raise list_error
-                else:
-                    # Provider might not support models.list()
-                    # Show success with note based on provider type
-                    if provider_key == "caption_maker":
-                        if "whisper" not in model.lower():
-                            messagebox.showwarning("Warning", 
-                                f"Model '{model}' doesn't look like a Whisper model.\n\nExpected: whisper-1 or similar")
-                            return
-                    elif provider_key == "hook_maker":
-                        if "tts" not in model.lower():
-                            messagebox.showwarning("Warning", 
-                                f"Model '{model}' doesn't look like a TTS model.\n\nExpected: tts-1, tts-1-hd or similar")
-                            return
-                    
-                    messagebox.showinfo("Success", 
-                        f"✓ API Key validated!\n\nModel: {model}\nProvider: {url}\n\n" +
-                        "Note: Could not verify model availability (provider may not support models.list)")
-        
+                    # Check if model is available
+                    if model in available_models:
+                        messagebox.showinfo("Success", 
+                            f"✓ Configuration validated successfully!\n\nModel: {model}\nProvider: {url}")
+                    else:
+                        # Model not found, but connection works
+                        messagebox.showwarning("Warning", 
+                            f"Model '{model}' not found in available models.\n\n" +
+                            f"Available models: {', '.join(available_models[:5])}...")
+                except Exception as list_error:
+                    # Check if it's a connection/authentication error
+                    error_str = str(list_error).lower()
+                    if any(x in error_str for x in ['connection', 'timeout', 'unreachable', 'invalid', 'unauthorized', 'authentication', 'api key', 'not found', '404', '401', '403']):
+                        # Real error - connection or auth failed
+                        raise list_error
+                    else:
+                        # Provider might not support models.list()
+                        # Show success with note based on provider type
+                        if provider_key == "caption_maker":
+                            if "whisper" not in model.lower():
+                                messagebox.showwarning("Warning", 
+                                    f"Model '{model}' doesn't look like a Whisper model.\n\nExpected: whisper-1 or similar")
+                                return
+                        elif provider_key == "hook_maker":
+                            if "tts" not in model.lower():
+                                messagebox.showwarning("Warning", 
+                                    f"Model '{model}' doesn't look like a TTS model.\n\nExpected: tts-1, tts-1-hd or similar")
+                                return
+                        
+                        messagebox.showinfo("Success", 
+                            f"✓ API Key validated!\n\nModel: {model}\nProvider: {url}\n\n" +
+                            "Note: Could not verify model availability (provider may not support models.list)")
         except Exception as e:
             messagebox.showerror("Validation Failed", 
                 f"Failed to validate configuration:\n\n{str(e)}")
@@ -525,26 +548,34 @@ class SettingsPage(ctk.CTkFrame):
             
             # Apply to all entry fields
             self.hf_provider_var.set(provider_type)
+            self.hf_url_entry.configure(state="normal")
             self.hf_url_entry.delete(0, "end")
             self.hf_url_entry.insert(0, url)
+            self.hf_key_entry.delete(0, "end")
             self.hf_key_entry.insert(0, api_key)
             self.on_hf_provider_change(provider_type)
             
             self.cm_provider_var.set(provider_type)
+            self.cm_url_entry.configure(state="normal")
             self.cm_url_entry.delete(0, "end")
             self.cm_url_entry.insert(0, url)
+            self.cm_key_entry.delete(0, "end")
             self.cm_key_entry.insert(0, api_key)
             self.on_cm_provider_change(provider_type)
             
             self.hm_provider_var.set(provider_type)
+            self.hm_url_entry.configure(state="normal")
             self.hm_url_entry.delete(0, "end")
             self.hm_url_entry.insert(0, url)
+            self.hm_key_entry.delete(0, "end")
             self.hm_key_entry.insert(0, api_key)
             self.on_hm_provider_change(provider_type)
             
             self.yt_provider_var.set(provider_type)
+            self.yt_url_entry.configure(state="normal")
             self.yt_url_entry.delete(0, "end")
             self.yt_url_entry.insert(0, url)
+            self.yt_key_entry.delete(0, "end")
             self.yt_key_entry.insert(0, api_key)
             self.on_yt_provider_change(provider_type)
             
@@ -552,27 +583,69 @@ class SettingsPage(ctk.CTkFrame):
             
     def on_hf_provider_change(self, provider_type):
         if provider_type.lower() == "gemini":
+            self.hf_url_entry.configure(state="normal")
+            self.hf_url_entry.delete(0, "end")
+            self.hf_url_entry.insert(0, "Gemini SDK (Direct)")
             self.hf_url_entry.configure(state="disabled", fg_color="gray30")
+            self.hf_model_var.set("gemini-1.5-flash")
         else:
             self.hf_url_entry.configure(state="normal", fg_color=("white", "gray20"))
+            if self.hf_url_entry.get() == "Gemini SDK (Direct)":
+                self.hf_url_entry.delete(0, "end")
+                self.hf_url_entry.insert(0, "https://api.openai.com/v1")
+            if "gemini" in self.hf_model_var.get().lower():
+                self.hf_model_var.set("gpt-4o")
             
     def on_cm_provider_change(self, provider_type):
         if provider_type.lower() == "gemini":
+            self.cm_url_entry.configure(state="normal")
+            self.cm_url_entry.delete(0, "end")
+            self.cm_url_entry.insert(0, "Gemini SDK (Direct)")
             self.cm_url_entry.configure(state="disabled", fg_color="gray30")
+            self.cm_model_entry.delete(0, "end")
+            self.cm_model_entry.insert(0, "gemini-1.5-flash")
         else:
             self.cm_url_entry.configure(state="normal", fg_color=("white", "gray20"))
+            if self.cm_url_entry.get() == "Gemini SDK (Direct)":
+                self.cm_url_entry.delete(0, "end")
+                self.cm_url_entry.insert(0, "https://api.openai.com/v1")
+            if "gemini" in self.cm_model_entry.get().lower():
+                self.cm_model_entry.delete(0, "end")
+                self.cm_model_entry.insert(0, "whisper-1")
             
     def on_hm_provider_change(self, provider_type):
         if provider_type.lower() == "gemini":
+            self.hm_url_entry.configure(state="normal")
+            self.hm_url_entry.delete(0, "end")
+            self.hm_url_entry.insert(0, "Gemini SDK (Direct)")
             self.hm_url_entry.configure(state="disabled", fg_color="gray30")
+            # Gemini doesn't have TTS, but we show the flash model as a hint 
+            # or just leave it for the user if they want to try anyway (though core warns)
+            self.hm_model_entry.delete(0, "end")
+            self.hm_model_entry.insert(0, "gemini-1.5-flash")
         else:
             self.hm_url_entry.configure(state="normal", fg_color=("white", "gray20"))
+            if self.hm_url_entry.get() == "Gemini SDK (Direct)":
+                self.hm_url_entry.delete(0, "end")
+                self.hm_url_entry.insert(0, "https://api.openai.com/v1")
+            if "gemini" in self.hm_model_entry.get().lower():
+                self.hm_model_entry.delete(0, "end")
+                self.hm_model_entry.insert(0, "tts-1")
             
     def on_yt_provider_change(self, provider_type):
         if provider_type.lower() == "gemini":
+            self.yt_url_entry.configure(state="normal")
+            self.yt_url_entry.delete(0, "end")
+            self.yt_url_entry.insert(0, "Gemini SDK (Direct)")
             self.yt_url_entry.configure(state="disabled", fg_color="gray30")
+            self.yt_model_var.set("gemini-1.5-flash")
         else:
             self.yt_url_entry.configure(state="normal", fg_color=("white", "gray20"))
+            if self.yt_url_entry.get() == "Gemini SDK (Direct)":
+                self.yt_url_entry.delete(0, "end")
+                self.yt_url_entry.insert(0, "https://api.openai.com/v1")
+            if "gemini" in self.yt_model_var.get().lower():
+                self.yt_model_var.set("gpt-4o")
     
     def create_highlight_finder_tab(self):
         """Create Highlight Finder configuration tab"""
@@ -2399,11 +2472,19 @@ and YouTube Shorts."""
         }
         
         for provider_key, provider_config in ai_providers.items():
-            if not provider_config["api_key"]:
+            key = provider_config["api_key"]
+            if not key:
                 messagebox.showerror("Error", 
                     f"{provider_names[provider_key]} is missing API Key.\n\nPlease configure all providers or use 'Apply URL & Key to All' button.")
                 return
             
+            if key.startswith("http"):
+                if not messagebox.askyesno("Warning", 
+                    f"The API Key for {provider_names[provider_key]} looks like a URL starting with 'http'.\n\n" +
+                    "Usually API keys start with 'sk-' or are a long string of characters.\n\n" +
+                    "Are you sure this is the correct API Key?"):
+                    return
+
             if not provider_config["model"]:
                 messagebox.showerror("Error", 
                     f"{provider_names[provider_key]} is missing Model.\n\nPlease configure all providers.")

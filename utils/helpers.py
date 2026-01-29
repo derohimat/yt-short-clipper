@@ -24,7 +24,8 @@ def get_bundle_dir():
 def get_ffmpeg_path():
     """Get FFmpeg executable path"""
     if getattr(sys, 'frozen', False):
-        bundled = get_app_dir() / "ffmpeg" / "ffmpeg.exe"
+        ext = ".exe" if sys.platform == "win32" else ""
+        bundled = get_app_dir() / "ffmpeg" / f"ffmpeg{ext}"
         if bundled.exists():
             return str(bundled)
     return "ffmpeg"
@@ -33,7 +34,8 @@ def get_ffmpeg_path():
 def get_ytdlp_path():
     """Get yt-dlp executable path"""
     if getattr(sys, 'frozen', False):
-        bundled = get_app_dir() / "yt-dlp.exe"
+        ext = ".exe" if sys.platform == "win32" else ""
+        bundled = get_app_dir() / f"yt-dlp{ext}"
         if bundled.exists():
             return str(bundled)
     return "yt-dlp"

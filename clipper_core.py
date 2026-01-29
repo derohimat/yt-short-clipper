@@ -46,58 +46,73 @@ class AutoClipperCore:
         token_callback=None,
         cancel_check=None
     ):
+        self.log = log_callback or print
+        self.set_progress = progress_callback or (lambda s, p: None)
+        self.report_tokens = token_callback or (lambda gi, go, w, t: None)
+        self.is_cancelled = cancel_check or (lambda: False)
         # Multi-provider support
         self.ai_providers = ai_providers or {}
         
         # Create separate clients for each provider
         if self.ai_providers:
+            def clean_auth(config):
+                key = config.get("api_key", "").strip()
+                url = config.get("base_url", "https://api.openai.com/v1").strip()
+                if key.startswith("http"):
+                    self.log(f"  ⚠ CRITICAL: API Key looks like a URL: {key[:20]}...")
+                    self.log("    Please check your Settings -> AI API Settings. You might have swapped API Key and Base URL.")
+                return key, url
+
             # Highlight Finder client
             hf_config = self.ai_providers.get("highlight_finder", {})
             self.hf_provider_type = hf_config.get("provider_type", "openai")
+            hf_key, hf_url = clean_auth(hf_config)
             
             if self.hf_provider_type == "gemini":
-                genai.configure(api_key=hf_config.get("api_key", ""))
+                genai.configure(api_key=hf_key)
                 self.highlight_client = genai.GenerativeModel(hf_config.get("model", "gemini-1.5-flash"))
                 self.model = hf_config.get("model", "gemini-1.5-flash")
             else:
                 self.highlight_client = OpenAI(
-                    api_key=hf_config.get("api_key", ""),
-                    base_url=hf_config.get("base_url", "https://api.openai.com/v1")
+                    api_key=hf_key,
+                    base_url=hf_url
                 )
                 self.model = hf_config.get("model", model)
             
             # Caption Maker client (Whisper)
             cm_config = self.ai_providers.get("caption_maker", {})
             self.cm_provider_type = cm_config.get("provider_type", "openai")
+            cm_key, cm_url = clean_auth(cm_config)
             
             if self.cm_provider_type == "gemini":
-                genai.configure(api_key=cm_config.get("api_key", ""))
+                genai.configure(api_key=cm_key)
                 # Gemini uses the same client for everything, but we store the model name
                 self.caption_client = genai.GenerativeModel(cm_config.get("model", "gemini-1.5-flash"))
                 self.whisper_model = cm_config.get("model", "gemini-1.5-flash")
             else:
                 self.caption_client = OpenAI(
-                    api_key=cm_config.get("api_key", ""),
-                    base_url=cm_config.get("base_url", "https://api.openai.com/v1")
+                    api_key=cm_key,
+                    base_url=cm_url
                 )
                 self.whisper_model = cm_config.get("model", "whisper-1")
             
             # Hook Maker client (TTS)
             hm_config = self.ai_providers.get("hook_maker", {})
             self.hm_provider_type = hm_config.get("provider_type", "openai")
+            hm_key, hm_url = clean_auth(hm_config)
             
             if self.hm_provider_type == "gemini":
                 # Gemini doesn't have TTS, so we fallback to OpenAI if possible or warn
                 self.log("  ⚠ Warning: Gemini does not support TTS (Hook Maker). Falling back to OpenAI if configured.")
                 self.tts_client = OpenAI(
-                    api_key=hm_config.get("api_key", ""),
-                    base_url=hm_config.get("base_url", "https://api.openai.com/v1")
+                    api_key=hm_key,
+                    base_url=hm_url
                 )
                 self.tts_model = hm_config.get("model", tts_model)
             else:
                 self.tts_client = OpenAI(
-                    api_key=hm_config.get("api_key", ""),
-                    base_url=hm_config.get("base_url", "https://api.openai.com/v1")
+                    api_key=hm_key,
+                    base_url=hm_url
                 )
                 self.tts_model = hm_config.get("model", tts_model)
         else:
@@ -129,10 +144,6 @@ class AutoClipperCore:
             "center_weight": 0.3
         }
         self.subtitle_language = subtitle_language
-        self.log = log_callback or print
-        self.set_progress = progress_callback or (lambda s, p: None)
-        self.report_tokens = token_callback or (lambda gi, go, w, t: None)
-        self.is_cancelled = cancel_check or (lambda: False)
         
         # GPU acceleration settings
         self.gpu_enabled = False
@@ -145,6 +156,66 @@ class AutoClipperCore:
         # Create temp directory
         self.temp_dir = self.output_dir / "_temp"
         self.temp_dir.mkdir(parents=True, exist_ok=True)
+
+    def _get_cascade_path(self, cascade_name='haarcascade_frontalface_default.xml'):
+        """Helper to find OpenCV cascade file in different environments"""
+        # 1. Try standard cv2 position
+        path = os.path.join(cv2.data.haarcascades, cascade_name)
+        if os.path.exists(path):
+            return path
+            
+        # 2. Try PyInstaller bundle paths
+        bundle_dir = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
+        bundle_paths = [
+            os.path.join(bundle_dir, 'cv2', 'data', cascade_name),
+            os.path.join(bundle_dir, '_internal', 'cv2', 'data', cascade_name),
+            os.path.join(bundle_dir, 'assets', cascade_name),
+        ]
+        for p in bundle_paths:
+            if os.path.exists(p):
+                return p
+        
+        # 3. Last resort - look in assets in current directory
+        local_assets = os.path.join(os.path.abspath("."), "assets", cascade_name)
+        if os.path.exists(local_assets):
+            return local_assets
+            
+        return None
+    
+    def _gen_content_with_retry(self, client, prompt, temperature, max_retries=5, current_log="Finding highlights"):
+        """Helper to call Gemini with retries on quota error"""
+        last_error = None
+        for i in range(max_retries):
+            try:
+                # Check if it's a list (multimodal) or string
+                if isinstance(prompt, list):
+                    response = client.generate_content(
+                        prompt,
+                        generation_config=genai.types.GenerationConfig(
+                            temperature=temperature,
+                        )
+                    )
+                else:
+                    response = client.generate_content(
+                        prompt,
+                        generation_config=genai.types.GenerationConfig(
+                            temperature=temperature,
+                        )
+                    )
+                return response
+            except Exception as e:
+                last_error = e
+                error_str = str(e).lower()
+                # 429 is Resource Exhausted / Quota Exceeded
+                if "quota" in error_str or "429" in error_str or "resource_exhausted" in error_str:
+                    wait_time = (i + 1) * 10 # 10s, 20s, 30s...
+                    self.log(f"  ⚠ Quota exceeded for Gemini. Retrying in {wait_time}s ({i+1}/{max_retries})...")
+                    time.sleep(wait_time)
+                    if self.is_cancelled():
+                        raise Exception("Process cancelled by user")
+                    continue
+                raise e
+        raise last_error
     
     def enable_gpu_acceleration(self, enabled: bool = True):
         """Enable or disable GPU acceleration for video encoding"""
@@ -326,15 +397,27 @@ Transcript:
                 self.log("  Warning: Could not parse metadata")
         
         # Download video + subtitle with progress
-        self.log(f"  Downloading video with {self.subtitle_language} subtitle...")
+        self.log(f"  Downloading video with {self.subtitle_language} subtitle (Preferring H.264)...")
+        
+        # Clear yt-dlp cache to avoid old session tokens/403s
+        try:
+            subprocess.run([self.ytdlp_path, "--rm-cache-dir"], capture_output=True, check=False)
+        except:
+            pass
+            
         cmd = [
             self.ytdlp_path,
-            "-f", "bestvideo[height<=1080]+bestaudio/best[height<=1080]",
+            "-f", "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]/best[height<=1080]/best",
             "--write-sub", "--write-auto-sub",
             "--sub-lang", self.subtitle_language,
             "--convert-subs", "srt",
             "--merge-output-format", "mp4",
-            "--newline",  # Progress on new lines
+            "--ffmpeg-location", self.ffmpeg_path,
+            "--no-check-certificate",
+            "--prefer-free-formats",
+            "--add-header", "User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "--extractor-args", "youtube:player_client=web,mweb,public,ios",
+            "--newline",
             "-o", str(self.temp_dir / "source.%(ext)s"),
             url
         ]
@@ -348,6 +431,7 @@ Transcript:
             creationflags=SUBPROCESS_FLAGS
         )
         
+        full_output = []
         last_progress = ""
         while True:
             # Check for cancellation
@@ -364,6 +448,11 @@ Transcript:
             if not line:
                 continue
                 
+            full_output.append(line)
+            # Log errors or warnings to console
+            if "error" in line.lower() or "warning" in line.lower():
+                self.log(f"  {line}")
+
             # Parse download progress
             if "[download]" in line and "%" in line:
                 # Extract percentage
@@ -379,7 +468,8 @@ Transcript:
                 self.set_progress("Merging video & audio...", 0.25)
         
         if process.returncode != 0:
-            raise Exception("Download failed!")
+            error_details = "\n".join(full_output[-5:]) # Get last 5 lines
+            raise Exception(f"Download failed!\n\nOutput:\n{error_details}")
         
         video_path = self.temp_dir / "source.mp4"
         srt_path = self.temp_dir / f"source.{self.subtitle_language}.srt"
@@ -509,33 +599,64 @@ Transcript:
             self.log("  ⚠ Warning: {num_clips} placeholder not replaced - check your system prompt")
 
         if self.hf_provider_type == "gemini":
-            response = self.highlight_client.generate_content(
-                prompt,
-                generation_config=genai.types.GenerationConfig(
-                    temperature=self.temperature,
-                )
+            response = self._gen_content_with_retry(
+                self.highlight_client, 
+                prompt, 
+                self.temperature,
+                current_log="[2/4] Finding highlights"
             )
             result = response.text.strip()
             # Report tokens for Gemini
             try:
-                # Gemini usage metadata might vary by version
                 prompt_tokens = response.usage_metadata.prompt_token_count
                 candidate_tokens = response.usage_metadata.candidates_token_count
                 self.report_tokens(prompt_tokens, candidate_tokens, 0, 0)
             except:
                 pass
         else:
-            response = self.highlight_client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=self.temperature,
-            )
+            # OpenAI / Custom Provider logic with retry
+            max_retries = 3
+            last_error = None
             
-            # Report token usage (input and output separately)
-            if response.usage:
-                self.report_tokens(response.usage.prompt_tokens, response.usage.completion_tokens, 0, 0)
-            
-            result = response.choices[0].message.content.strip()
+            # Simple token estimation and trimming for OpenAI TPM limits (approx 4 chars per token)
+            # Tier 1 TPM is often 30,000. Let's limit to ~25,000 tokens if it's huge.
+            MAX_TOKENS_EST = 25000
+            if len(prompt) > MAX_TOKENS_EST * 4:
+                self.log(f"  ⚠ Transcript is very long ({len(prompt)} chars). Trimming to fit OpenAI TPM limits...")
+                # Try to keep the prompt structure but trim the transcript part
+                transcript_limit = MAX_TOKENS_EST * 3 # Reserve some for instructions
+                trimmed_transcript = transcript[:transcript_limit * 4] + "\n... (transcript trimmed due to length) ..."
+                prompt = self.system_prompt.replace("{num_clips}", str(request_clips))
+                prompt = prompt.replace("{video_context}", video_context)
+                prompt = prompt.replace("{transcript}", trimmed_transcript)
+
+            for i in range(max_retries):
+                try:
+                    response = self.highlight_client.chat.completions.create(
+                        model=self.model,
+                        messages=[{"role": "user", "content": prompt}],
+                        temperature=self.temperature,
+                    )
+                    
+                    # Report token usage
+                    if response.usage:
+                        self.report_tokens(response.usage.prompt_tokens, response.usage.completion_tokens, 0, 0)
+                    
+                    result = response.choices[0].message.content.strip()
+                    break
+                except Exception as e:
+                    last_error = e
+                    err_msg = str(e).lower()
+                    if "429" in err_msg or "rate limit" in err_msg:
+                        wait_time = (i + 1) * 30 # Wait longer for OpenAI (30s, 60s...)
+                        self.log(f"  ⚠ OpenAI Rate limit hit. Waiting {wait_time}s ({i+1}/{max_retries})...")
+                        time.sleep(wait_time)
+                        if self.is_cancelled():
+                             raise Exception("Process cancelled by user")
+                        continue
+                    raise e
+            else:
+                raise last_error
         
         # Log raw response for debugging
         self.log(f"  Raw GPT response (first 500 chars):\n{result[:500]}")
@@ -823,9 +944,11 @@ Transcript:
         out_w, out_h = 1080, 1920
         
         # Face detector
-        face_cascade = cv2.CascadeClassifier(
-            cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
-        )
+        cascade_path = self._get_cascade_path()
+        face_cascade = cv2.CascadeClassifier(cascade_path or "")
+        
+        if face_cascade.empty():
+            self.log(f"  ⚠ Warning: Face detector could not be loaded. Falling back to center crop.")
         
         # First pass: analyze frames
         crop_positions = []
@@ -1507,7 +1630,12 @@ Transcript:
                 
                 prompt = "Transcribe this audio with word-level timestamps. Return ONLY JSON array of objects with keys: 'word', 'start', 'end'. 'start' and 'end' must be floats in seconds."
                 
-                response = self.caption_client.generate_content([prompt, audio_upload])
+                response = self._gen_content_with_retry(
+                    self.caption_client,
+                    [prompt, audio_upload],
+                    0.7, # Default temperature
+                    current_log="Transcribing audio with Gemini"
+                )
                 result_text = response.text.strip()
                 
                 # Cleanup uploaded file
@@ -1768,9 +1896,11 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         out_w, out_h = 1080, 1920
         
         # Face detector
-        face_cascade = cv2.CascadeClassifier(
-            cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
-        )
+        cascade_path = self._get_cascade_path()
+        face_cascade = cv2.CascadeClassifier(cascade_path or "")
+        
+        if face_cascade.empty():
+            self.log(f"  ⚠ Warning: Face detector could not be loaded. Falling back to center crop.")
         
         # First pass: analyze frames (0-40%)
         print("[DEBUG] Pass 1: Analyzing frames...")
