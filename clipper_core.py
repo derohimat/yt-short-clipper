@@ -1157,6 +1157,19 @@ Transcript:
         """Create a short preview clip with face tracking"""
         self.log(f"\n[Preview] Generating {duration}s preview for {Path(video_path).name}...")
         
+        # Handle URL input
+        if video_path.startswith("http") and not os.path.exists(video_path):
+            try:
+                # Reuse download_video logic (handles caching)
+                self.log("  Input is URL, checking cache/downloading...")
+                # Note: download_video copies into temp_dir
+                video_source, _, _ = self.download_video(video_path)
+                video_path = video_source
+            except Exception as e:
+                self.log(f"  ⚠ Failed to prepare video: {e}")
+                # We raise here because ffmpeg will definitely fail with a raw URL
+                raise Exception(f"Failed to download video for preview: {e}")
+        
         # Output to temp preview file
         timestamp = datetime.now().strftime("%H%M%S")
         preview_dir = self.output_dir / "previews"
