@@ -123,8 +123,15 @@ class ReplizUploadDialog(ctk.CTkToplevel):
             font=ctk.CTkFont(size=11, weight="bold"), anchor="w").pack(fill="x", padx=15)
         self.desc_text = ctk.CTkTextbox(metadata_frame, height=100, wrap="word")
         self.desc_text.pack(fill="x", padx=15, pady=(5, 12))
-        self.desc_text.insert("1.0", "Generating SEO metadata...")
-        self.desc_text.configure(state="disabled")
+        self.desc_text.pack(fill="x", padx=15, pady=(5, 12))
+        
+        # Pre-fill description if available
+        initial_desc = self.clip_data.get("description", "")
+        if initial_desc:
+            self.desc_text.insert("1.0", initial_desc)
+        else:
+            self.desc_text.insert("1.0", "Generating SEO metadata...")
+            self.desc_text.configure(state="disabled")
         
         # Schedule section
         schedule_frame = ctk.CTkFrame(main_scroll, fg_color=("gray90", "gray17"), corner_radius=10)
@@ -205,8 +212,8 @@ class ReplizUploadDialog(ctk.CTkToplevel):
             command=self.start_upload, state="disabled")
         self.upload_btn.pack(side="right", fill="x", expand=True, padx=(5, 0))
         
-        # Start generating metadata
-        if self.openai_client:
+        # Start generating metadata only if description is missing
+        if self.openai_client and not self.clip_data.get("description"):
             self.generate_metadata()
     
     def generate_metadata(self):

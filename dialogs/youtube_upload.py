@@ -32,7 +32,11 @@ class YouTubeUploadDialog(ctk.CTkToplevel):
         self.set_dialog_icon()
         
         self.create_ui()
-        self.generate_seo_metadata()
+        self.create_ui()
+        
+        # Generate SEO metadata only if description is missing
+        if not self.clip.get("description"):
+            self.generate_seo_metadata()
     
     def set_dialog_icon(self):
         """Set dialog icon to match main window"""
@@ -101,6 +105,13 @@ class YouTubeUploadDialog(ctk.CTkToplevel):
             text_color="gray", anchor="e")
         self.desc_count.pack(fill="x")
         self.desc_text.bind("<KeyRelease>", self.update_desc_count)
+        
+        # Pre-fill description if available
+        initial_desc = self.clip.get("description", "")
+        if initial_desc:
+            self.desc_text.insert("1.0", initial_desc)
+        else:
+            self.desc_text.insert("1.0", "Generating SEO metadata...")
         
         # Privacy
         privacy_frame = ctk.CTkFrame(scroll_frame, fg_color="transparent")

@@ -372,7 +372,10 @@ Format:
     "end_time": "HH:MM:SS,mmm",
     "title": "Judul singkat",
     "reason": "Kenapa segmen ini kuat",
-    "hook_text": "Hook text"
+    "hook_text": "Hook text",
+    "description": "Deskripsi YouTube menarik (max 3 kalimat, sertakan hashtags)",
+    "keywords": "keyword1, keyword2, keyword3"
+  }
   }
 ]
 
@@ -1134,6 +1137,8 @@ Transcript:
         metadata = {
             "title": highlight["title"],
             "hook_text": highlight.get("hook_text", highlight["title"]),
+            "description": highlight.get("description", ""),
+            "keywords": highlight.get("keywords", ""),
             "start_time": highlight["start_time"],
             "end_time": highlight["end_time"],
             "duration_seconds": highlight["duration_seconds"],

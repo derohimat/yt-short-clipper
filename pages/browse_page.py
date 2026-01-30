@@ -308,6 +308,8 @@ class BrowsePage(ctk.CTkFrame):
             "video": video_path,
             "title": data.get("title", "Untitled"),
             "hook_text": data.get("hook_text", ""),
+            "description": data.get("description", ""),
+            "keywords": data.get("keywords", ""),
             "duration": data.get("duration_seconds", 0)
         }
         
@@ -339,6 +341,8 @@ class BrowsePage(ctk.CTkFrame):
             "video": video_path,
             "title": data.get("title", "Untitled"),
             "hook_text": data.get("hook_text", ""),
+            "description": data.get("description", ""),
+            "keywords": data.get("keywords", ""),
             "duration": data.get("duration_seconds", 0)
         }
         
