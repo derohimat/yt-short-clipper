@@ -1141,7 +1141,7 @@ Transcript:
             "has_captions": add_captions,
             "has_watermark": self.watermark_settings.get("enabled", False),
             "video_path": str(video_path),
-            "original_file": video_path.name
+            "original_file": Path(video_path).name
         }
         
         # Determine metadata path

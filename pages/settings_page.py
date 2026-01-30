@@ -1152,7 +1152,9 @@ class SettingsPage(ctk.CTkFrame):
         def do_detect():
             try:
                 from utils.gpu_detector import GPUDetector
-                detector = GPUDetector()
+                from utils.helpers import get_ffmpeg_path
+                
+                detector = GPUDetector(ffmpeg_path=get_ffmpeg_path())
                 
                 # Detect GPU
                 gpu_info = detector.detect_gpu()
