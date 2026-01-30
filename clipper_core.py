@@ -1152,6 +1152,69 @@ Transcript:
             
         with open(metadata_path, "w", encoding="utf-8") as f:
             json.dump(metadata, f, ensure_ascii=False, indent=2)
+
+    def create_preview_clip(self, video_path: str, duration: int = 15):
+        """Create a short preview clip with face tracking"""
+        self.log(f"\n[Preview] Generating {duration}s preview for {Path(video_path).name}...")
+        
+        # Output to temp preview file
+        timestamp = datetime.now().strftime("%H%M%S")
+        preview_dir = self.output_dir / "previews"
+        preview_dir.mkdir(exist_ok=True)
+        
+        preview_filename = f"preview_{timestamp}.mp4"
+        preview_file = preview_dir / preview_filename
+        
+        # 1. Cut a segment (from 10% in to avoid intro)
+        # Get duration first
+        try:
+             # Basic probe to get duration
+            probe_cmd = [self.ffmpeg_path.replace("ffmpeg", "ffprobe"), "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", video_path]
+            # Handle Windows/Mac diffs
+            if sys.platform == "win32":
+                proc = subprocess.run(probe_cmd, capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW)
+            else:
+                proc = subprocess.run(probe_cmd, capture_output=True, text=True)
+                
+            total_duration = float(proc.stdout.strip())
+            start_time = min(total_duration * 0.1, 30.0) # Start at 10% or 30s, whichever is earlier
+        except:
+            start_time = 0.0
+            
+        temp_cut = preview_dir / f"temp_cut_{timestamp}.mp4"
+        
+        cmd = [
+            self.ffmpeg_path, "-y",
+            "-ss", str(start_time),
+            "-t", str(duration),
+            "-i", video_path,
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23", # Fast encoding
+            "-c:a", "aac",
+            str(temp_cut)
+        ]
+        
+        self.log("  Step 1: Cutting segment...")
+        if sys.platform == "win32":
+            subprocess.run(cmd, check=True, creationflags=subprocess.CREATE_NO_WINDOW)
+        else:
+            subprocess.run(cmd, check=True)
+            
+        # 2. Convert to portrait
+        self.log("  Step 2: Applied Face Tracking...")
+        try:
+            self.convert_to_portrait(str(temp_cut), str(preview_file))
+        except Exception as e:
+            self.log(f"  Preview failed: {e}")
+            if temp_cut.exists(): temp_cut.unlink()
+            raise e
+            
+        # Cleanup
+        if temp_cut.exists():
+            temp_cut.unlink()
+            
+        self.log(f"  ✓ Preview ready: {preview_file}")
+        return str(preview_file)
+
     
     def convert_to_portrait(self, input_path: str, output_path: str):
         """Convert landscape to 9:16 portrait with speaker tracking (router method)"""

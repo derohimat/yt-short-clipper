@@ -345,11 +345,24 @@ class YTShortClipperApp(ctk.CTk):
         self.hook_switch = hook_switch
         
         # Generate Shorts button
-        self.start_btn = ctk.CTkButton(left_col, text="Generate Shorts", image=self.play_icon, 
+        # Action Buttons Row
+        action_row = ctk.CTkFrame(left_col, fg_color="transparent")
+        action_row.pack(fill="x", pady=(0, 8))
+        
+        # Generate Shorts button (Larger)
+        self.start_btn = ctk.CTkButton(action_row, text="Generate Shorts", image=self.play_icon, 
             compound="left", font=ctk.CTkFont(size=15, weight="bold"), 
             height=50, command=self.start_processing, state="disabled", 
             fg_color="gray", hover_color="gray", corner_radius=10)
-        self.start_btn.pack(fill="x", pady=(0, 8))
+        self.start_btn.pack(side="left", fill="x", expand=True, padx=(0, 5))
+        
+        # Preview button (Smaller)
+        self.preview_btn = ctk.CTkButton(action_row, text="Preview\nCrop", 
+            font=ctk.CTkFont(size=12, weight="bold"), 
+            height=50, command=self.start_preview, state="disabled",
+            fg_color=("gray75", "gray25"), text_color=("black", "white"),
+            hover_color=("gray65", "gray35"), corner_radius=10, width=80)
+        self.preview_btn.pack(side="right", fill="y", padx=(0, 0))
         
         # Browse Videos link
         browse_link = ctk.CTkLabel(left_col, text="📂 Browse Videos", 
@@ -709,10 +722,24 @@ class YTShortClipperApp(ctk.CTk):
     def on_url_change(self, *args):
         url = self.url_var.get().strip()
         debug_log(f"URL changed to: {url}") # DEBUG LOG
+        
+        is_local = os.path.exists(url) and os.path.isfile(url)
         video_id = extract_video_id(url)
+        
         if video_id:
             self.load_thumbnail(video_id)
             self.load_subtitles(url)  # NEW: Fetch available subtitles
+            # Enable button
+            self.start_btn.configure(state="normal", fg_color=("#3B8ED0", "#1F6AA5"), hover_color=("#2980b9", "#154360"))
+            self.preview_btn.configure(state="normal", fg_color=("gray70", "gray30"), hover_color=("gray60", "gray40"))
+        elif is_local:
+            # Handle local file
+            self.load_local_thumbnail(url)
+            # Enable button
+            self.start_btn.configure(state="normal", fg_color=("#3B8ED0", "#1F6AA5"), hover_color=("#2980b9", "#154360"))
+            self.preview_btn.configure(state="normal", fg_color=("gray70", "gray30"), hover_color=("gray60", "gray40"))
+            # Hide subtitle selector for local (we'll look for .srt in core)
+            self.subtitle_frame.pack_forget()
         else:
             self.current_thumbnail = None
             # Recreate placeholder
@@ -721,6 +748,7 @@ class YTShortClipperApp(ctk.CTk):
             self.subtitle_frame.pack_forget()
             # Disable start button when URL is invalid
             self.start_btn.configure(state="disabled", fg_color="gray", hover_color="gray")
+            self.preview_btn.configure(state="disabled", fg_color=("gray75", "gray25"), hover_color=("gray75", "gray25"))
     
     def load_subtitles(self, url: str):
         """Fetch available subtitles for the video"""
@@ -848,6 +876,46 @@ class YTShortClipperApp(ctk.CTk):
         self.thumb_label.pack()
         
         self.start_btn.configure(state="disabled", fg_color="gray", hover_color="gray")
+        threading.Thread(target=fetch, daemon=True).start()
+
+    def load_local_thumbnail(self, video_path: str):
+        """Extract thumbnail from local video file"""
+        def fetch():
+            try:
+                import cv2
+                cap = cv2.VideoCapture(video_path)
+                # Get frame at 1 second mark or first frame
+                cap.set(cv2.CAP_PROP_POS_MSEC, 1000)
+                ret, frame = cap.read()
+                if not ret:
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                    ret, frame = cap.read()
+                cap.release()
+                
+                if ret:
+                    # Convert BGR to RGB
+                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    img = Image.fromarray(frame_rgb)
+                    img.thumbnail((380, 214), Image.Resampling.LANCZOS)
+                    self.after(0, lambda: self.show_thumbnail(img))
+                    # Re-enable button if still focused on this path
+                    self.after(0, lambda: self.start_btn.configure(state="normal", fg_color=("#3B8ED0", "#1F6AA5"), hover_color=("#2980b9", "#154360")))
+                else:
+                    self.after(0, lambda: self.on_thumbnail_error())
+            except Exception as e:
+                debug_log(f"Local thumbnail error: {e}")
+                self.after(0, lambda: self.on_thumbnail_error())
+        
+        # Show loading state
+        for widget in self.thumb_frame.winfo_children():
+            widget.destroy()
+        
+        loading_container = ctk.CTkFrame(self.thumb_frame, fg_color="transparent")
+        loading_container.place(relx=0.5, rely=0.5, anchor="center")
+        
+        ctk.CTkLabel(loading_container, text="📂 Loading Local File...", 
+            font=ctk.CTkFont(size=13), text_color="gray").pack()
+            
         threading.Thread(target=fetch, daemon=True).start()
     
     def on_thumbnail_error(self):
@@ -1356,6 +1424,74 @@ class YTShortClipperApp(ctk.CTk):
         if messagebox.askyesno("Update Available", msg):
             import webbrowser
             webbrowser.open(download_url)
+
+
+    def start_preview(self):
+        """Start preview generation"""
+        url = self.url_var.get().strip()
+        is_local = os.path.exists(url) and os.path.isfile(url)
+        
+        if not is_local and not extract_video_id(url):
+            messagebox.showerror("Error", "Enter a valid YouTube URL or select a local file!")
+            return
+            
+        self.preview_btn.configure(state="disabled", text="Generating...")
+        
+        # Start processing in thread
+        output_dir = self.config.get("output_dir", "output")
+        face_mode = self.config.get("face_tracking_mode", "opencv")
+        mediapipe_settings = self.config.get("mediapipe_settings", {})
+        
+        threading.Thread(target=self.run_preview, 
+            args=(url, output_dir, face_mode, mediapipe_settings), daemon=True).start()
+            
+    def run_preview(self, url, output_dir, face_mode, mediapipe_settings):
+        """Run preview generation in background"""
+        try:
+            from clipper_core import AutoClipperCore
+            
+            # Simple core init just for preview
+            core = AutoClipperCore(
+                client=None, # No AI needed for preview
+                ffmpeg_path=get_ffmpeg_path(),
+                ytdlp_path=get_ytdlp_path(),
+                output_dir=output_dir,
+                model="gpt-4",
+                face_tracking_mode=face_mode,
+                mediapipe_settings=mediapipe_settings,
+                log_callback=debug_log
+            )
+            
+            # Enable GPU if configured
+            gpu_settings = self.config.get("gpu_acceleration", {})
+            if gpu_settings.get("enabled", False):
+                core.enable_gpu_acceleration(True)
+                
+            # If YouTube URL, need to download first... wait, that's heavy for preview.
+            # Ideally we stream or download small chunk. But ClipperCore downloads full video.
+            # For now, let's warn if it's a URL that it might take time to download.
+            # Or better: check if cached source exists.
+            
+            if not (os.path.exists(url) and os.path.isfile(url)):
+                # It's a YouTube URL. Let's rely on ClipperCore to find cached source.
+                # If not cached, it will download.
+                pass
+                
+            preview_path = core.create_preview_clip(url, duration=15)
+            
+            # Open the preview
+            if sys.platform == "win32":
+                os.startfile(preview_path)
+            elif sys.platform == "darwin":
+                subprocess.run(["open", preview_path])
+            else:
+                subprocess.run(["xdg-open", preview_path])
+                
+        except Exception as e:
+            debug_log(f"Preview error: {e}")
+            self.after(0, lambda: messagebox.showerror("Preview Failed", str(e)))
+        finally:
+            self.after(0, lambda: self.preview_btn.configure(state="normal", text="Preview\nCrop"))
 
 
 def handle_exception(exc_type, exc_value, exc_traceback):
