@@ -33,8 +33,11 @@ from pages.results_page import ResultsPage
 from pages.status_pages import APIStatusPage, LibStatusPage
 from pages.processing_page import ProcessingPage
 from pages.contact_page import ContactPage
+from pages.recommendations_page import RecommendationsPage
 from utils.history_manager import HistoryManager
+from utils.queue_manager import QueueManager
 from components.history_list import HistoryList
+from components.queue_panel import QueuePanel
 
 # Fix for PyInstaller windowed mode (console=False)
 # When built with console=False, sys.stdout and sys.stderr are None
@@ -92,6 +95,7 @@ class YTShortClipperApp(ctk.CTk):
         self.youtube_connected = False
         self.youtube_channel = None
         self.history_manager = HistoryManager(DATA_DIR / "history.json")
+        self.queue_manager = QueueManager(DATA_DIR / "queue.json")
         self.video_title = "YouTube Video"
         self.ytdlp_path = get_ytdlp_path()  # NEW: Store yt-dlp path for subtitle fetching
         
@@ -120,6 +124,7 @@ class YTShortClipperApp(ctk.CTk):
         self.create_api_status_page()
         self.create_lib_status_page()
         self.create_contact_page()
+        self.create_recommendations_page()
         
         self.show_page("home")
         self.load_config()
@@ -387,6 +392,11 @@ class YTShortClipperApp(ctk.CTk):
         # Preview content container (will be recreated when showing thumbnail)
         self.create_preview_placeholder()
         
+        # Queue Panel
+        self.queue_panel = QueuePanel(right_col, self.queue_manager, 
+            self.process_queue, self.on_queue_item_removed)
+        self.queue_panel.pack(fill="x", pady=(15, 0))
+        
         # Footer
         footer = PageFooter(page, self)
         footer.pack(fill="x", padx=20, pady=(10, 15), side="bottom")
@@ -627,6 +637,11 @@ class YTShortClipperApp(ctk.CTk):
             lambda: self.config.get("installation_id", "unknown"),
             lambda: self.show_page("home")
         )
+    
+    def create_recommendations_page(self):
+        """Create Discovery/Recommendations page"""
+        page = RecommendationsPage(self.container, self)
+        self.pages["recommendations"] = page
     
     def load_config(self):
         api_key = self.config.get("api_key", "")
@@ -1282,6 +1297,61 @@ class YTShortClipperApp(ctk.CTk):
         
         # Load created clips in results page
         self.pages["results"].load_clips()
+        
+        # Check if processing from queue
+        if hasattr(self, 'processing_queue') and self.processing_queue:
+            # Process next video in queue
+            self.after(1000, self.process_next_in_queue)
+    
+    def process_queue(self):
+        """Start processing videos in queue"""
+        if self.processing:
+            messagebox.showwarning("Processing", "Already processing a video. Please wait.")
+            return
+        
+        self.processing_queue = True
+        self.process_next_in_queue()
+    
+    def process_next_in_queue(self):
+        """Process the next pending video in queue"""
+        next_video = self.queue_manager.get_next_pending()
+        
+        if next_video is None:
+            # Queue complete
+            self.processing_queue = False
+            self.queue_panel.refresh_queue()
+            messagebox.showinfo("Queue Complete", "All videos in queue have been processed!")
+            return
+        
+        # Update status to processing
+        self.queue_manager.update_status(next_video["url"], "processing")
+        
+        # Set URL and start processing
+        self.url_var.set(next_video["url"])
+        
+        # Wait for URL validation, then start processing
+        self.after(2000, lambda: self._start_queue_processing(next_video))
+    
+    def _start_queue_processing(self, video):
+        """Start processing a video from queue"""
+        try:
+            # Trigger processing
+            self.start_processing()
+            
+            # Mark as completed after processing starts
+            self.queue_manager.update_status(video["url"], "completed")
+            self.queue_panel.refresh_queue()
+        except Exception as e:
+            debug_log(f"Error processing queue video: {e}")
+            self.queue_manager.update_status(video["url"], "failed")
+            self.queue_panel.refresh_queue()
+            # Continue with next video
+            self.after(1000, self.process_next_in_queue)
+    
+    def on_queue_item_removed(self, video):
+        """Called when an item is removed from queue"""
+        debug_log(f"Removed from queue: {video['title']}")
+    
     
     def show_browse_after_complete(self):
         """Show browse page after processing complete"""

@@ -125,6 +125,12 @@ class PageHeader(ctk.CTkFrame):
                 fg_color=("#2b2b2b", "#1a1a1a"), hover_color=("#3a3a3a", "#2a2a2a"), corner_radius=10,
                 command=lambda: self.app.show_page("settings")).pack(side="left", padx=3)
             
+            # Discovery Button
+            ctk.CTkButton(nav_frame, text="Discovery", 
+                width=90, height=40, font=ctk.CTkFont(size=11),
+                fg_color=("#8E44AD", "#9B59B6"), hover_color=("#9B59B6", "#8E44AD"), corner_radius=10,
+                command=lambda: self.app.show_page("recommendations")).pack(side="left", padx=3)
+            
             ctk.CTkButton(nav_frame, text="API", image=api_icon, compound="left",
                 width=70, height=40, font=ctk.CTkFont(size=11),
                 fg_color=("#2b2b2b", "#1a1a1a"), hover_color=("#3a3a3a", "#2a2a2a"), corner_radius=10,
